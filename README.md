@@ -93,3 +93,20 @@ INFO:hotfilm.py:ain0: n=300,nmissing=0,avg=-10.59, ain1: n=300,nmissing=0,avg=-1
 bpp is 64, which is `14+(stream_samples_per_packet*2)` according to
 `processStreamData()`, so that makes sense since samples_per_packet is 25.
 25*48 = 1200.
+
+
+== LabJack T7 ==
+
+The T7 uses a different python library, apparently a wrapper to the LJM C
+library, called labjack-ljm-python.  It can be installed with pip.
+
+```
+pip install labjack-ljm
+```
+
+Examples are on this page: https://labjack.com/pages/support?doc=%2Fsoftware-driver%2Fexample-codewrappers%2Fcc-for-ljm-windows-mac-linux%2F
+
+Link to download the beta examples:
+
+https://cdn.docsie.io/file/workspace_u4AEu22YJT50zKF8J/doc_VDWGWsJAhd453cYSI/boo_KXghxr3Yqvg6QlfuD/file_OaxHN7aj5f8twxWoh/c_c_ljm_2021-08-20_0.zip
+
