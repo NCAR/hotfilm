@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2021 UCAR, NCAR, All Rights Reserved -->
+
+<project
+    xmlns="http://www.eol.ucar.edu/nidas"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:xi="http://www.w3.org/2001/XInclude"
+    name="M2HATS"
+    system="ISFS"
+    maxStation="1"
+    version="$Revision: 4555 $">
+
+    <site name="t0" class="isff.GroundStation" suffix="">
+
+        <dsm name="hotfilm" id="200">
+
+            <serialSensor class="DSMSerialSensor" id="500" devicename="usock::32950">
+                <sample id="1" rate="1">
+                    <variable name="ch0_avg" units="V" longname="Channel 0 1-second mean"/>
+                    <variable name="ch1_avg" units="V" longname="Channel 1 1-second mean"/>
+                    <variable name="ch2_avg" units="V" longname="Channel 2 1-second mean"/>
+                    <variable name="ch3_avg" units="V" longname="Channel 3 1-second mean"/>
+                </sample>
+                <sample id="2" rate="1">
+                </sample>
+            </serialSensor>
+
+            <output class="RawSampleOutputStream">
+                <fileset dir="$DATAMNT/projects/${PROJECT}/raw_data"
+                        file="${DSM}_%Y%m%d_%H%M%S.dat"
+                        length="43200">
+                <mount dir="$DATAMNT"/>
+                </fileset>
+            </output>
+        </dsm>
+
+      </site>
+
+</project>

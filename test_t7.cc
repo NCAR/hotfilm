@@ -6,17 +6,28 @@
 #include <iostream>
 #include <vector>
 #include <exception>
+#include <memory>
 
-
+#include <nidas/core/Project.h>
 #include <nidas/core/NidasApp.h>
+#include <nidas/core/FileSet.h>
+#include <nidas/dynld/SampleOutputStream.h>
 #include <nidas/util/Logger.h>
-
+#include <nidas/util/UTime.h>
+#include <nidas/util/InvalidParameterException.h>
 
 using std::string;
 using std::vector;
 
 using namespace nidas::core;
-using namespace nidas::util;
+
+using nidas::dynld::SampleOutputStream;
+using nidas::util::Logger;
+using nidas::util::LogConfig;
+using nidas::util::LogContext;
+using nidas::util::LogMessage;
+using nidas::util::UTime;
+using nidas::util::InvalidParameterException;
 
 
 std::string
@@ -167,6 +178,8 @@ public:
     // data storage
     vector<double> aData;
 
+    nidas::dynld::SampleOutputStream* outstream = 0;
+
     int open();
 
     int close();
@@ -264,6 +277,13 @@ configure_stream()
     const double AIN_ALL_RANGE = 0;
     const int AIN_ALL_NEGATIVE_CH = LJM_GND;
 
+    ILOG(("Making sure stream is stopped."));
+    int err = LJM_eStreamStop(handle);
+    if (err)
+    {
+        PLOG(("stopping stream before configuring: ") << ljm_error_to_string(err));
+    }
+
     get_channel_addresses();
 
     ILOG(("Writing configurations..."));
@@ -297,13 +317,57 @@ int main(int argc, char const *argv[])
     LogConfig lc("info");
     logger->setScheme(logger->getScheme("default").addConfig(lc));
 
-    app.enableArguments(app.Help | app.loggingArgs());
-    app.parseArgs(argc, argv);
-    if (app.helpRequested())
+    try {
+        app.XmlHeaderFile.setRequired();
+        app.Hostname.setRequired();
+        app.enableArguments(app.XmlHeaderFile | app.OutputFiles | app.Hostname | \
+                            app.Help | app.Version | app.loggingArgs());
+        app.parseArgs(argc, argv);
+        if (app.helpRequested())
+        {
+            std::cout << "Usage: " << argv[0] << " [options] \n";
+            std::cout << app.usage();
+            return 0;
+        }
+        app.checkRequiredArguments();
+    }
+    catch (NidasAppException& appx)
     {
-        std::cout << "Usage: " << argv[0] << " [options] \n";
-        std::cout << app.usage();
-        return 0;
+        std::cerr << appx.toString() << std::endl;
+        return 1;
+    }
+
+    // May as well load a project xml to get the project-specific info for the
+    // header.
+    std::unique_ptr<Project, void(*)(Project*)>
+        project(Project::getInstance(), [](Project* p){
+            Project::destroyInstance();
+        });
+
+    try {
+        std::string xmlpath = app.xmlHeaderFile();
+        project->parseXMLConfigFile(xmlpath);
+        auto pos = xmlpath.find_last_of('/');
+        if (pos != string::npos)
+        {
+            xmlpath = xmlpath.substr(pos+1);
+        }
+        project->setConfigName(xmlpath);
+    }
+    catch (InvalidParameterException& xpe)
+    {
+        std::cerr << xpe.toString() << std::endl;
+        return 1;
+    }
+
+    FileSet* outSet = 0;
+    std::unique_ptr<SampleOutputStream> outStream;
+    if (app.OutputFiles.specified())
+    {
+        outSet = new FileSet();
+        outSet->setFileName(app.outputFileName());
+        outSet->setFileLengthSecs(app.outputFileLength());
+        outStream.reset(new SampleOutputStream(outSet));
     }
 
     HotFilm hf;
@@ -311,6 +375,7 @@ int main(int argc, char const *argv[])
     try {
         hf.open();
         hf.configure_stream();
+        hf.outstream = outStream.get();
         hf.stream();
         hf.close();
     }
@@ -353,6 +418,62 @@ stream()
     ILOG(("Stream started. Actual scan rate: %.02f Hz (%.02f sample rate)",
           scanRate, scanRate * numChannels));
 
+    // Technically scan rate is a double and does not need to divide evenly
+    // into a second.  So use the scans per read to compute the samples per
+    // second, knowing that it was chosen as half the scan rate.
+    unsigned int samples_per_second = 2 * scansPerRead;
+
+    // Create a Sample to hold the channels.  Unlike the data from the labjack
+    // which stores by channel first and then by scan, and may not include a
+    // full second of scans, we want the sample to contain contiguous full
+    // seconds for each channel.  I haven't seen the returned scan rate be
+    // different from the requested, but I suppose technically we should not
+    // expect more samples per second than that.
+
+    // For now, assume the sample layout as follows:
+    //
+    // Sample id 1 is the means:
+    //
+    // channel 0 1-second mean double, ... , channel N-1 1-second mean double
+    //
+    // Sample id 2 is the full 2 KHz samples:
+    //
+    // channel 0 scan-rate doubles, ... , channel N scan-rate doubles
+    //
+    // At some point we'll have to manufacture a SampleTag for that.
+
+    unsigned int doubles_per_sample = samples_per_second * numChannels;
+
+    SampleT<double> sample;
+    sample.allocateData(doubles_per_sample);
+    sample.setDataLength(doubles_per_sample);
+    unsigned int nscans_in_sample = 0;
+
+    SampleT<double> means;
+    means.allocateData(numChannels);
+    means.setDataLength(numChannels);
+
+    // Here's where we would set the sample id from the xml.
+    means.setDSMId(200);
+    means.setSpSId(501);
+    sample.setDSMId(200);
+    sample.setSpSId(502);
+
+    // Somewhere we need to decide what timestamp to assign to a sample before
+    // writing it out.  It could be the current time rounded to the second, if
+    // the labjack sampling is triggered on the PPS.  However, it seems best
+    // not to have to rely on the PPS to trigger sampling, just in case a GPS
+    // is not sync'd or goes bad.  If instead we rely on a counter input to
+    // detect the leading edge of the PPS, then we can line up the samples
+    // with the scan where the counter changes, or else guess.
+    //
+    // The convention will be that the sample timestamp is for the beginning
+    // of the time period covered by the scans.
+
+    // This also implies that the synchronization status will be an important
+    // diagnostic, such as the current value of the PPS counter, and a check
+    // that the counter is changing every <scanrate> scans.
+
     // Read the scans
     ILOG(("Now performing %d reads", numReads));
     for (iteration = 0; iteration < numReads; iteration++) {
@@ -384,6 +505,57 @@ stream()
             totalSkippedScans += numSkippedScans;
         }
         printf("\n");
+
+        // Fill the sample one channel at a time.
+        for (unsigned int channel = 0; channel < numChannels; ++channel)
+        {
+            double* sdp = sample.getDataPtr();
+            sdp += (channel * samples_per_second);
+            sdp += nscans_in_sample;
+            double* idp = aData.data() + channel;
+            for (int scan = 0; scan < scansPerRead; ++scan)
+            {
+                *(sdp++) = *idp;
+                idp += numChannels;
+            }
+        }
+        nscans_in_sample += scansPerRead;
+
+        // if this is full, compute the means and write it out.
+        if (nscans_in_sample == samples_per_second)
+        {
+            // proxy for timestamp, now - 1 second.
+            sample.setTimeTag(nidas::util::getSystemTime() - USECS_PER_SEC);
+            means.setTimeTag(sample.getTimeTag());
+            for (unsigned int channel = 0; channel < numChannels; ++channel)
+            {
+                double* sdp = sample.getDataPtr();
+                // skip the means.
+                sdp += numChannels;
+                sdp += (channel * samples_per_second);
+                double sum = 0;
+                for (unsigned int scan = 0; scan < samples_per_second; ++scan)
+                {
+                    sum += *sdp;
+                }
+                means.getDataPtr()[channel] = sum/samples_per_second;
+            }
+            static LogContext lp(LOG_DEBUG);
+            if (lp.active())
+            {
+                LogMessage msg(&lp, "sample full, computed means:");
+                for (unsigned int i = 0; i < numChannels; ++i)
+                {
+                    msg << " " << means.getDataPtr()[i];
+                }
+            }
+            if (outstream)
+            {
+                outstream->receive(&means);
+                outstream->receive(&sample);
+            }
+            nscans_in_sample = 0;
+        }
     }
     if (totalSkippedScans) {
         printf("\n****** Total number of skipped scans: %d ******\n\n",

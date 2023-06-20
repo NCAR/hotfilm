@@ -3,3 +3,4 @@ config.log
 config.py
 test_t7
 .sconf_temp
+hotfilm_*.dat
