@@ -162,7 +162,9 @@ public:
     int NUM_READS = 10;
 
     // Channels/Addresses to stream.
-    std::vector<std::string> channel_names{"AIN0", "AIN1", "AIN2", "AIN3"};
+    std::vector<std::string> channel_names{
+        "AIN0", "AIN2", "AIN4", "AIN6", "DIO0_EF_READ_A"
+    };
 
     int DeviceType = -1;
     int ConnectionType = -1;
@@ -200,7 +202,7 @@ public:
 int HotFilm::open()
 {
     // Open first found LabJack
-    int err = LJM_Open(LJM_dtT7, LJM_ctUSB, "LJM_idANY", &handle);
+    int err = LJM_Open(LJM_dtT7, LJM_ctETHERNET_TCP, "LJM_idANY", &handle);
     check_error(err, "open(T7, USB)");
     if (err)
         return err;
@@ -275,7 +277,6 @@ configure_stream()
     const int STREAM_RESOLUTION_INDEX = 0;
     const double STREAM_SETTLING_US = 0;
     const double AIN_ALL_RANGE = 0;
-    const int AIN_ALL_NEGATIVE_CH = LJM_GND;
 
     ILOG(("Making sure stream is stopped."));
     int err = LJM_eStreamStop(handle);
@@ -303,10 +304,23 @@ configure_stream()
     // Note: when streaming, negative channels and ranges can be configured for
     // individual analog inputs, but the stream has only one settling time and
     // resolution.
+
+    // default resolution index of 0 means index 8 for T7
     set_name(handle, "STREAM_RESOLUTION_INDEX", STREAM_RESOLUTION_INDEX);
     set_name(handle, "STREAM_SETTLING_US", STREAM_SETTLING_US);
     set_name(handle, "AIN_ALL_RANGE", AIN_ALL_RANGE);
+    // disable Extended Features on all AIN
+    set_name(handle, "AIN_ALL_EF_INDEX", 0);
+    // const int AIN_ALL_NEGATIVE_CH = LJM_GND;
+    // Set all AIN to differential.
+    const int AIN_ALL_NEGATIVE_CH = 1;
     set_name(handle, "AIN_ALL_NEGATIVE_CH", AIN_ALL_NEGATIVE_CH);
+
+    DLOG(("setting up counter on DIO0 (FIO0)..."));
+    set_name(handle, "DIO0_EF_ENABLE", 0);
+    set_name(handle, "DIO0_EF_INDEX", 8);
+    set_name(handle, "DIO0_EF_ENABLE", 1);
+
 }
 
 
@@ -444,12 +458,12 @@ stream()
 
     unsigned int doubles_per_sample = samples_per_second * numChannels;
 
-    SampleT<double> sample;
+    SampleT<float> sample;
     sample.allocateData(doubles_per_sample);
     sample.setDataLength(doubles_per_sample);
     unsigned int nscans_in_sample = 0;
 
-    SampleT<double> means;
+    SampleT<float> means;
     means.allocateData(numChannels);
     means.setDataLength(numChannels);
 
@@ -509,7 +523,7 @@ stream()
         // Fill the sample one channel at a time.
         for (unsigned int channel = 0; channel < numChannels; ++channel)
         {
-            double* sdp = sample.getDataPtr();
+            float* sdp = sample.getDataPtr();
             sdp += (channel * samples_per_second);
             sdp += nscans_in_sample;
             double* idp = aData.data() + channel;
@@ -529,14 +543,12 @@ stream()
             means.setTimeTag(sample.getTimeTag());
             for (unsigned int channel = 0; channel < numChannels; ++channel)
             {
-                double* sdp = sample.getDataPtr();
-                // skip the means.
-                sdp += numChannels;
+                float* sdp = sample.getDataPtr();
                 sdp += (channel * samples_per_second);
                 double sum = 0;
                 for (unsigned int scan = 0; scan < samples_per_second; ++scan)
                 {
-                    sum += *sdp;
+                    sum += *(sdp++);
                 }
                 means.getDataPtr()[channel] = sum/samples_per_second;
             }
