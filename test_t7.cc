@@ -4,6 +4,7 @@
 #include <string>
 #include <sstream>
 #include <iostream>
+#include <iomanip>
 #include <vector>
 #include <exception>
 #include <memory>
@@ -11,6 +12,8 @@
 #include <nidas/core/Project.h>
 #include <nidas/core/NidasApp.h>
 #include <nidas/core/FileSet.h>
+#include <nidas/core/DSMEngine.h>
+#include <nidas/core/SampleOutputRequestThread.h>
 #include <nidas/dynld/SampleOutputStream.h>
 #include <nidas/util/Logger.h>
 #include <nidas/util/UTime.h>
@@ -18,6 +21,9 @@
 
 using std::string;
 using std::vector;
+using std::cout;
+using std::cerr;
+using std::endl;
 
 using namespace nidas::core;
 
@@ -115,12 +121,11 @@ int CountAndOutputNumSkippedScans(int numInChannels, int scansPerRead, double * 
         }
     }
     if (numSkippedSamples) {
-        printf("****** %d data scans were placeholders for scans that were skipped ******\n",
-            numSkippedSamples / numInChannels);
-        printf("****** %.01f %% of the scans were skipped ******\n",
-            100 * (double)numSkippedSamples / scansPerRead / numInChannels);
+        PLOG(("****** %d data scans were placeholders for scans that were skipped ******",
+              numSkippedSamples / numInChannels));
+        PLOG(("****** %.01f %% of the scans were skipped ******",
+              100 * (double)numSkippedSamples / scansPerRead / numInChannels));
     }
-
     return numSkippedSamples / numInChannels;
 }
 
@@ -374,6 +379,14 @@ int main(int argc, char const *argv[])
         return 1;
     }
 
+    std::string hostname = app.getHostName();
+    DSMConfig* dsmconfig = project->findDSMFromHostname(hostname);
+    if (!dsmconfig) 
+    {
+        throw InvalidParameterException("dsm", "no match for hostname",
+                                        hostname);
+    }
+
     FileSet* outSet = 0;
     std::unique_ptr<SampleOutputStream> outStream;
     if (app.OutputFiles.specified())
@@ -495,30 +508,48 @@ stream()
             &LJMScanBacklog);
         check_error(err, "LJM_eStreamRead");
 
-        ILOG(("iteration: %d - deviceScanBacklog: %d, LJMScanBacklog: %d",
-              iteration, deviceScanBacklog, LJMScanBacklog));
         if (ConnectionType != LJM_ctUSB) {
             err = LJM_GetStreamTCPReceiveBufferStatus(handle,
                 &receiveBufferBytesSize, &receiveBufferBytesBacklog);
             check_error(err, "LJM_GetStreamTCPReceiveBufferStatus");
-            ILOG(("-> receive backlog: %f%%",
-                 ((double)receiveBufferBytesBacklog) / receiveBufferBytesSize * 100));
+            DLOG(("iteration: %d - deviceScanBacklog: %d, LJMScanBacklog: %d",
+                  iteration, deviceScanBacklog, LJMScanBacklog)
+                  << "-> receive backlog: " << std::setprecision(0)
+                  << ((double)receiveBufferBytesBacklog) / receiveBufferBytesSize * 100);
         }
-        printf("\n");
-        printf("  1st scan out of %d:\n", scansPerRead);
-        for (channel = 0; channel < numChannels; channel++) {
-            printf("    %s = %0.5f\n", channel_names[channel].c_str(), aData[channel]);
+        else
+        {
+            DLOG(("iteration: %d - deviceScanBacklog: %d, LJMScanBacklog: %d",
+                  iteration, deviceScanBacklog, LJMScanBacklog));
+        }
+        static LogContext lp(LOG_DEBUG);
+        if (lp.active())
+        {
+            for (channel = 0; channel < numChannels; channel++) {
+                LogMessage msg(&lp);
+                msg << channel_names[channel] << "=" << std::setprecision(3);
+                int scan = 0;
+                for (; scan < 10 && scan < scansPerRead; ++scan)
+                    msg << " " << aData[channel + scan*numChannels];
+                
+                if (scan + 10 < scansPerRead)
+                {
+                    scan = scansPerRead - 10;
+                    msg << "...";
+                }
+                for (; scan < scansPerRead; ++scan)
+                    msg << " " << aData[channel + scan*numChannels];
+            }
         }
 
         numSkippedScans = CountAndOutputNumSkippedScans(numChannels,
             scansPerRead, aData.data());
 
         if (numSkippedScans) {
-            printf("  %d skipped scans in this LJM_eStreamRead\n",
-                numSkippedScans);
+            ILOG(("  %d skipped scans in this LJM_eStreamRead",
+                  numSkippedScans));
             totalSkippedScans += numSkippedScans;
         }
-        printf("\n");
 
         // Fill the sample one channel at a time.
         for (unsigned int channel = 0; channel < numChannels; ++channel)
@@ -543,14 +574,21 @@ stream()
             means.setTimeTag(sample.getTimeTag());
             for (unsigned int channel = 0; channel < numChannels; ++channel)
             {
+                float min{0}, max{0};
                 float* sdp = sample.getDataPtr();
                 sdp += (channel * samples_per_second);
                 double sum = 0;
                 for (unsigned int scan = 0; scan < samples_per_second; ++scan)
                 {
+                    min = (scan == 0) ? *sdp : std::min(min, *sdp);
+                    max = (scan == 0) ? *sdp : std::max(max, *sdp);
                     sum += *(sdp++);
                 }
-                means.getDataPtr()[channel] = sum/samples_per_second;
+                float mean = sum/samples_per_second;
+                means.getDataPtr()[channel] = mean;
+                VLOG(("") << channel_names[channel]
+                      << " mean/min/max: " << std::setprecision(6)
+                      << mean << "/" << min << "/" << max);
             }
             static LogContext lp(LOG_DEBUG);
             if (lp.active())
@@ -570,8 +608,8 @@ stream()
         }
     }
     if (totalSkippedScans) {
-        printf("\n****** Total number of skipped scans: %d ******\n\n",
-            totalSkippedScans);
+        PLOG(("****** Total number of skipped scans: %d ******",
+              totalSkippedScans));
     }
 
     ILOG(("Stopping stream"));
