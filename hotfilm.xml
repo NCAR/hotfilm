@@ -14,6 +14,7 @@
 
         <dsm name="hotfilm" id="200">
 
+            <!-- <serialSensor class="LabJackSensor" id="500" devicename="usock::32950"> -->
             <serialSensor class="DSMSerialSensor" id="500" devicename="usock::32950">
                 <sample id="1" rate="1">
                     <variable name="ch0_avg" units="V" longname="Channel 0 1-second mean"/>
@@ -32,12 +33,24 @@
             </serialSensor>
 
             <output class="RawSampleOutputStream">
+                <socket type="server" port="31000" maxIdle="60" block="false"/>
+            </output>
+
+            <output class="RawSampleOutputStream">
+                <fileset dir="."
+                        file="${DSM}_%Y%m%d_%H%M%S.dat"
+                        length="3600">
+                </fileset>
+            </output>
+
+            <!-- <output class="RawSampleOutputStream">
                 <fileset dir="$DATAMNT/projects/${PROJECT}/raw_data"
                         file="${DSM}_%Y%m%d_%H%M%S.dat"
                         length="43200">
                 <mount dir="$DATAMNT"/>
                 </fileset>
-            </output>
+            </output> -->
+
         </dsm>
 
       </site>

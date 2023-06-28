@@ -10,11 +10,14 @@
 #include <memory>
 
 #include <nidas/core/Project.h>
+#include <nidas/core/DSMConfig.h>
 #include <nidas/core/NidasApp.h>
 #include <nidas/core/FileSet.h>
 #include <nidas/core/DSMEngine.h>
 #include <nidas/core/SampleOutputRequestThread.h>
 #include <nidas/dynld/SampleOutputStream.h>
+#include <nidas/core/DSMSensor.h>
+#include <nidas/core/CharacterSensor.h>
 #include <nidas/util/Logger.h>
 #include <nidas/util/UTime.h>
 #include <nidas/util/InvalidParameterException.h>
@@ -24,6 +27,7 @@ using std::vector;
 using std::cout;
 using std::cerr;
 using std::endl;
+using std::list;
 
 using namespace nidas::core;
 
@@ -144,6 +148,11 @@ set_name(int handle, const std::string& name, double value)
 }
 
 
+namespace nidas { namespace dynld {
+    class LabJackSensor;
+}}
+
+
 /**
  * HotFilm encapsulates the settings to stream hot film anemometer channels
  * from the LabJack T7 ADC and record them to disk.
@@ -186,6 +195,7 @@ public:
     vector<double> aData;
 
     nidas::dynld::SampleOutputStream* outstream = 0;
+    nidas::dynld::LabJackSensor* labjack = 0;
 
     int open();
 
@@ -329,18 +339,133 @@ configure_stream()
 }
 
 
+namespace nidas { namespace dynld {
+
+// Inherit CharacterSensor just to avoid having to implement buildIODevice()
+// and buildSampleScanner().
+class LabJackSensor: public nidas::core::CharacterSensor,
+                     public nidas::core::SampleConnectionRequester
+{
+public:
+    LabJackSensor()
+    {}
+
+    virtual ~LabJackSensor()
+    {}
+
+    void connect(SampleOutput* output) throw() override;
+
+    void disconnect(SampleOutput* output) throw() override;
+
+    void publish_sample(Sample* sample);
+
+    HotFilm hotfilm;
+
+    std::set<SampleOutput*> _outputSet;
+
+    nidas::util::Mutex _outputMutex;
+};
+
+
+}} // namespace nidas { namespace dynld {
+
+
+using namespace nidas::dynld;
+
+NIDAS_CREATOR_FUNCTION(LabJackSensor);
+
+
+void
+LabJackSensor::publish_sample(Sample* sample)
+{
+    // send this sample to each of the outputs.  See
+    // SampleSourceSupport::distribute() for an explanation of the copy.
+    // Basically receive() needs to be able to call disconnect() for itself,
+    // which means being able to lock the outputs and erase it's pointer.  As
+    // long as the receive() is causing the disconnect, meaning the output
+    // pointer is valid when receive() is called, then there should be no
+    // problem, because the output pointer is not used again after that.
+    _outputMutex.lock();
+    auto copies(_outputSet);
+    _outputMutex.unlock();
+    for (auto* output: copies)
+    {
+        output->receive(sample);
+    }
+}
+
+
+/* implementation of SampleConnectionRequester::connect(SampleOutput*) */
+void LabJackSensor::connect(SampleOutput* output) throw()
+{
+    ILOG(("LabJackSensor: connection from ") << output->getName());
+    _outputMutex.lock();
+    _outputSet.insert(output);
+    _outputMutex.unlock();
+}
+
+/*
+ * An output wants to disconnect: probably the remote dsm_server went
+ * down, or a client disconnected.
+ */
+void LabJackSensor::disconnect(SampleOutput* output) throw()
+{
+    _outputMutex.lock();
+    _outputSet.erase(output);
+    _outputMutex.unlock();
+    output->flush();
+    try {
+        output->close();
+    } 
+    catch (const IOException& ioe) {
+        PLOG(("LabJackSensor: error closing ") << output->getName()
+            << ioe.what());
+    }
+
+    SampleOutput* orig = output->getOriginal();
+    if (output != orig)
+        SampleOutputRequestThread::getInstance()->addDeleteRequest(output);
+
+    int delay = orig->getReconnectDelaySecs();
+    if (delay < 0) return;
+    SampleOutputRequestThread::getInstance()->addConnectRequest(orig,this,delay);
+}
+
+
+#ifdef notdef
+// This works to setup a DSMEngine and locate the LabJackSensor, but then the
+// sensor instance has to have a way to notify the SensorHandler of new
+// samples to read.  Instead, try to mimic what DSMEngine does to setup the
+// Project and DSMConfig with all the outputs, but then let the sensor itself
+// drive the sample reading and distribution.
+
+int main(int argc, char *argv[])
+{
+    int res = DSMEngine::main(argc, argv);	// deceptively simple
+    ILOG(("dsm exiting, status=") << res);
+    return res;
+}
+#endif
+
+
 int main(int argc, char const *argv[])
 {
     NidasApp app("test_t7");
+    NidasAppArg ReadCount("-n,--number", "COUNT",
+                          "Stop after COUNT reads, unless 0", "0");
     Logger* logger = Logger::getInstance();
     LogConfig lc("info");
     logger->setScheme(logger->getScheme("default").addConfig(lc));
 
+    LabJackSensor labjack;
+    HotFilm& hf = labjack.hotfilm;
+    hf.labjack = &labjack;
+
     try {
         app.XmlHeaderFile.setRequired();
         app.Hostname.setRequired();
-        app.enableArguments(app.XmlHeaderFile | app.OutputFiles | app.Hostname | \
-                            app.Help | app.Version | app.loggingArgs());
+        app.enableArguments(app.XmlHeaderFile | app.OutputFiles | app.Hostname |
+                            ReadCount | app.Help | app.Version | app.loggingArgs());
         app.parseArgs(argc, argv);
         if (app.helpRequested())
         {
@@ -349,6 +474,7 @@ int main(int argc, char const *argv[])
             return 0;
         }
         app.checkRequiredArguments();
+        hf.NUM_READS = ReadCount.asInt();
     }
     catch (NidasAppException& appx)
     {
@@ -387,22 +513,33 @@ int main(int argc, char const *argv[])
                                         hostname);
     }
 
-    FileSet* outSet = 0;
+    SampleOutputRequestThread::getInstance()->start();
+    // Taken from DSMEngine::connectOutputs()
+    const list<SampleOutput*>& outputs = dsmconfig->getOutputs();
+    list<SampleOutput*>::const_iterator oi;
+    for (oi = outputs.begin(); oi != outputs.end(); ++oi) {
+        SampleOutput* output = *oi;
+        DLOG(("requesting connection from SampleOutput ")
+              << "'" << output->getName() << "'");
+        SampleOutputRequestThread::getInstance()->addConnectRequest(output, &labjack, 0);
+    }
+
+#ifdef notdef
+    nidas::core::FileSet* outSet = 0;
     std::unique_ptr<SampleOutputStream> outStream;
     if (app.OutputFiles.specified())
     {
-        outSet = new FileSet();
+        outSet = new nidas::core::FileSet();
         outSet->setFileName(app.outputFileName());
         outSet->setFileLengthSecs(app.outputFileLength());
         outStream.reset(new SampleOutputStream(outSet));
     }
-
-    HotFilm hf;
+#endif
 
     try {
         hf.open();
         hf.configure_stream();
-        hf.outstream = outStream.get();
+        // hf.outstream = outStream.get();
         hf.stream();
         hf.close();
     }
@@ -502,8 +639,8 @@ stream()
     // that the counter is changing every <scanrate> scans.
 
     // Read the scans
-    ILOG(("Now performing %d reads", numReads));
-    for (iteration = 0; iteration < numReads; iteration++) {
+    for (iteration = 0; numReads == 0 || iteration < numReads; iteration++)
+    {
         err = LJM_eStreamRead(handle, aData.data(), &deviceScanBacklog,
             &LJMScanBacklog);
         check_error(err, "LJM_eStreamRead");
@@ -603,6 +740,11 @@ stream()
             {
                 outstream->receive(&means);
                 outstream->receive(&sample);
+            }
+            if (labjack)
+            {
+                labjack->publish_sample(&means);
+                labjack->publish_sample(&sample);
             }
             nscans_in_sample = 0;
         }
