@@ -17,6 +17,6 @@ env = Environment(tools=['default', 'buildmode', 'nidas', 'labjack'])
 env.Append(CXXFLAGS=['-std=c++11', '-Wno-deprecated', '-fpic', '-fPIC', '-rdynamic'])
 env.Append(LINKFLAGS=['-fpic', '-fPIC', '-rdynamic'])
 
-env.Default(env.Program('test_t7.cc'))
+env.Default(env.Program('hotfilm.cc'))
 
 env.SetHelp()

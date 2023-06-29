@@ -501,7 +501,7 @@ For TCP streams, buffer statistics are queried and reported.)""");
 
     try {
         app.XmlHeaderFile.setRequired();
-        app.Hostname.setRequired();
+        app.Hostname.setDefault("hotfilm");
         app.enableArguments(app.XmlHeaderFile | app.Hostname |
                             ReadCount | app.Username | Diagnostics |
                             app.Help | app.Version | app.loggingArgs());
