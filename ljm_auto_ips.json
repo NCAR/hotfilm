@@ -1,0 +1,19 @@
+{
+	"autoIPs" : 
+	[
+		{
+			"deviceType" : 7,
+			"errorDaysSinceSuccess" : [],
+			"ip" : "192.168.1.190",
+			"lastKnownDevice" : 
+			{
+				"firmware" : "1.0292",
+				"ljmConnectionType" : 3,
+				"name" : "My_T7_0990",
+				"serialNumber" : 470030990,
+				"usableMaxPacketBytes" : 1040
+			},
+			"port" : 502
+		}
+	]
+}
