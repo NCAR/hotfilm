@@ -175,9 +175,9 @@ public:
     // How many times to call LJM_eStreamRead before calling LJM_eStreamStop
     int NUM_READS = 10;
 
-    // Channels/Addresses to stream.
+    // Channels/Addresses to stream.  The counter is always first.
     std::vector<std::string> channel_names{
-        "AIN0", "AIN2", "AIN4", "AIN6", "DIO0_EF_READ_A"
+        "DIO0_EF_READ_A", "AIN0", "AIN2", "AIN4", "AIN6"
     };
 
     int DeviceType = -1;
@@ -194,7 +194,6 @@ public:
     // data storage
     vector<double> aData;
 
-    nidas::dynld::SampleOutputStream* outstream = 0;
     nidas::dynld::LabJackSensor* labjack = 0;
 
     int open();
@@ -271,13 +270,14 @@ HotFilm::
 get_channel_addresses()
 {
     // cache the addresses for the channel names
-    unsigned int nchannels = channel_names.size();
-    const char* names[nchannels];
-    for (unsigned int i = 0; i < nchannels; ++i)
-        names[i] = channel_names[i].c_str();
+    vector<const char*> names;
+    // pps counter is always first
+    for (unsigned int i = 0; i < channel_names.size(); ++i)
+        names.push_back(channel_names[i].c_str());
+    unsigned int nchannels = names.size();
     aScanList.resize(nchannels);
     aScanTypes.resize(nchannels);
-    int err = LJM_NamesToAddresses(channel_names.size(), names, aScanList.data(), aScanTypes.data());
+    int err = LJM_NamesToAddresses(channel_names.size(), names.data(), aScanList.data(), aScanTypes.data());
     check_error(err, "Getting positive channel addresses");
     return err;
 }
@@ -524,22 +524,9 @@ int main(int argc, char const *argv[])
         SampleOutputRequestThread::getInstance()->addConnectRequest(output, &labjack, 0);
     }
 
-#ifdef notdef
-    nidas::core::FileSet* outSet = 0;
-    std::unique_ptr<SampleOutputStream> outStream;
-    if (app.OutputFiles.specified())
-    {
-        outSet = new nidas::core::FileSet();
-        outSet->setFileName(app.outputFileName());
-        outSet->setFileLengthSecs(app.outputFileLength());
-        outStream.reset(new SampleOutputStream(outSet));
-    }
-#endif
-
     try {
         hf.open();
         hf.configure_stream();
-        // hf.outstream = outStream.get();
         hf.stream();
         hf.close();
     }
@@ -587,41 +574,48 @@ stream()
     // second, knowing that it was chosen as half the scan rate.
     unsigned int samples_per_second = 2 * scansPerRead;
 
-    // Create a Sample to hold the channels.  Unlike the data from the labjack
-    // which stores by channel first and then by scan, and may not include a
-    // full second of scans, we want the sample to contain contiguous full
-    // seconds for each channel.  I haven't seen the returned scan rate be
-    // different from the requested, but I suppose technically we should not
-    // expect more samples per second than that.
+    // Create Samples to hold the stats and the channels.  Unlike the data
+    // from the labjack which stores by channel first and then by scan, and
+    // may not include a full second of scans, we want the sample to contain
+    // contiguous full second for each channel.  I haven't seen the returned
+    // scan rate be different from the requested, but I suppose technically we
+    // should not expect more samples per second than that.
 
-    // For now, assume the sample layout as follows:
-    //
-    // Sample id 1 is the means:
-    //
-    // channel 0 1-second mean double, ... , channel N-1 1-second mean double
-    //
-    // Sample id 2 is the full 2 KHz samples:
-    //
-    // channel 0 scan-rate doubles, ... , channel N scan-rate doubles
-    //
-    // At some point we'll have to manufacture a SampleTag for that.
-
-    unsigned int doubles_per_sample = samples_per_second * numChannels;
-
-    SampleT<float> sample;
-    sample.allocateData(doubles_per_sample);
-    sample.setDataLength(doubles_per_sample);
+    // keep track of how many scans in each sample so far
     unsigned int nscans_in_sample = 0;
 
-    SampleT<float> means;
-    means.allocateData(numChannels);
-    means.setDataLength(numChannels);
+    int DSMID = 200;
+    int SENSORID = 500;
 
-    // Here's where we would set the sample id from the xml.
-    means.setDSMId(200);
-    means.setSpSId(501);
-    sample.setDSMId(200);
-    sample.setSpSId(502);
+    SampleT<float> series[numChannels];
+    for (auto& sample: series)
+    {
+        // Each series 
+        unsigned int i = &sample - series;
+        // we could try to pull these from the sample tag from the xml, but
+        // for now just hardcode it.
+        sample.setDSMId(DSMID);
+        sample.setSpSId(SENSORID + ((i == 0) ? 2 : 20 + i - 1));
+        sample.allocateData(samples_per_second);
+        sample.setDataLength(samples_per_second);
+    }
+
+    SampleT<float> pps_stats;
+    pps_stats.setDSMId(DSMID);
+    pps_stats.setSpSId(SENSORID + 1);
+    pps_stats.allocateData(3);
+    pps_stats.setDataLength(3);
+
+    SampleT<float> stats[numChannels-1];
+    for (auto& sample: stats)
+    {
+        // 3 variables each: avg/min/max
+        unsigned int i = &sample - stats;
+        sample.setDSMId(DSMID);
+        sample.setSpSId(SENSORID + 10 + i);
+        sample.allocateData(3);
+        sample.setDataLength(3);
+    }
 
     // Somewhere we need to decide what timestamp to assign to a sample before
     // writing it out.  It could be the current time rounded to the second, if
@@ -638,21 +632,38 @@ stream()
     // diagnostic, such as the current value of the PPS counter, and a check
     // that the counter is changing every <scanrate> scans.
 
-    // Read the scans
+    dsm_time_t timestamp = 0;
+    // the last pps counter value seen:
+    int pps_count = -1;
+    int pps_step = -1;
+    double backlog_pct = 0;
     for (iteration = 0; numReads == 0 || iteration < numReads; iteration++)
     {
+        // Get a timestamp before the read and after to get stats on how long
+        // it takes.  Assume the time after corresponds most closely to the
+        // time of the last scan, meaning we get the data back as soon as
+        // possible after a scan is complete.  So if the pps counter has a
+        // transition in this iteration, then we can assign a timestamp to
+        // that transition using the last even second before after.
+        dsm_time_t before = nidas::util::getSystemTime();
         err = LJM_eStreamRead(handle, aData.data(), &deviceScanBacklog,
             &LJMScanBacklog);
+        dsm_time_t after = nidas::util::getSystemTime();
+        DLOG(("LJM_eStreamRead: ") << "completed in "
+             << (after-before) << " usecs");
         check_error(err, "LJM_eStreamRead");
 
         if (ConnectionType != LJM_ctUSB) {
             err = LJM_GetStreamTCPReceiveBufferStatus(handle,
                 &receiveBufferBytesSize, &receiveBufferBytesBacklog);
             check_error(err, "LJM_GetStreamTCPReceiveBufferStatus");
+            backlog_pct = receiveBufferBytesBacklog;
+            backlog_pct = backlog_pct / receiveBufferBytesSize * 100;
             DLOG(("iteration: %d - deviceScanBacklog: %d, LJMScanBacklog: %d",
                   iteration, deviceScanBacklog, LJMScanBacklog)
                   << "-> receive backlog: " << std::setprecision(0)
-                  << ((double)receiveBufferBytesBacklog) / receiveBufferBytesSize * 100);
+                  << backlog_pct << "% of buffer size "
+                  << receiveBufferBytesSize << " bytes");
         }
         else
         {
@@ -688,15 +699,34 @@ stream()
             totalSkippedScans += numSkippedScans;
         }
 
-        // Fill the sample one channel at a time.
+        // Fill the sample for each channel.
         for (unsigned int channel = 0; channel < numChannels; ++channel)
         {
-            float* sdp = sample.getDataPtr();
-            sdp += (channel * samples_per_second);
+            float* sdp = series[channel].getDataPtr();
             sdp += nscans_in_sample;
             double* idp = aData.data() + channel;
             for (int scan = 0; scan < scansPerRead; ++scan)
             {
+                if (channel == 0)
+                {
+                    // look for a pps counter change.
+                    if (pps_count == -1)
+                        pps_count = *idp;
+                    else if (pps_count != *idp)
+                    {
+                        pps_step = scan + nscans_in_sample;
+                        // Now work backwards to get the timestamp.  We assume
+                        // this only happens every other read.
+                        timestamp = (after / USECS_PER_SEC) * USECS_PER_SEC;
+                        timestamp -= (1.0 / scanRate) * pps_step * USECS_PER_SEC;
+                        DLOG(("pps count transition from ") << pps_count << " to "
+                             << *idp << " at scan " << pps_step
+                             << ", timestamp adjusted to "
+                             << UTime(timestamp).format(true, "%H:%M:%S.%4f"));
+                        pps_count = *idp;
+
+                    }
+                }
                 *(sdp++) = *idp;
                 idp += numChannels;
             }
@@ -706,14 +736,21 @@ stream()
         // if this is full, compute the means and write it out.
         if (nscans_in_sample == samples_per_second)
         {
-            // proxy for timestamp, now - 1 second.
-            sample.setTimeTag(nidas::util::getSystemTime() - USECS_PER_SEC);
-            means.setTimeTag(sample.getTimeTag());
-            for (unsigned int channel = 0; channel < numChannels; ++channel)
+            // if timestamp has not been set, because there have been no pps
+            // transitions, or else if it has not changed since the last
+            // sample, then use after minus one second.
+            if (!timestamp || timestamp == pps_stats.getTimeTag())
+            {
+                PLOG(("") << "no pps count, using approximate time tag");
+                timestamp = after - USECS_PER_SEC;
+            }
+            // no stats sample for the pps counter first in scan list
+            series[0].setTimeTag(timestamp);
+            for (unsigned int channel = 1; channel < numChannels; ++channel)
             {
                 float min{0}, max{0};
-                float* sdp = sample.getDataPtr();
-                sdp += (channel * samples_per_second);
+                series[channel].setTimeTag(timestamp);
+                float* sdp = series[channel].getDataPtr();
                 double sum = 0;
                 for (unsigned int scan = 0; scan < samples_per_second; ++scan)
                 {
@@ -722,29 +759,40 @@ stream()
                     sum += *(sdp++);
                 }
                 float mean = sum/samples_per_second;
-                means.getDataPtr()[channel] = mean;
-                VLOG(("") << channel_names[channel]
-                      << " mean/min/max: " << std::setprecision(6)
-                      << mean << "/" << min << "/" << max);
+                stats[channel-1].setTimeTag(timestamp);
+                float* vars = stats[channel-1].getDataPtr();
+                vars[0] = mean;
+                vars[1] = min;
+                vars[2] = max;
             }
+            pps_stats.setTimeTag(timestamp);
+            float* pps_vars = pps_stats.getDataPtr();
+            pps_vars[0] = pps_count;
+            pps_vars[1] = pps_step;
+            pps_vars[2] = backlog_pct;
             static LogContext lp(LOG_DEBUG);
             if (lp.active())
             {
-                LogMessage msg(&lp, "sample full, computed means:");
-                for (unsigned int i = 0; i < numChannels; ++i)
+                LogMessage msg(&lp, "stats:");
+                msg << std::setprecision(3);
+                for (unsigned int i = 0; i < numChannels-1; ++i)
                 {
-                    msg << " " << means.getDataPtr()[i];
+                    float* vars = stats[i].getDataPtr();
+                    msg << " " << channel_names[i+1] << ":"
+                        << vars[0] << "/" << vars[1] << "/" << vars[2];
                 }
-            }
-            if (outstream)
-            {
-                outstream->receive(&means);
-                outstream->receive(&sample);
             }
             if (labjack)
             {
-                labjack->publish_sample(&means);
-                labjack->publish_sample(&sample);
+                labjack->publish_sample(&pps_stats);
+                for (auto& sample: series)
+                {
+                    labjack->publish_sample(&sample);
+                }
+                for (auto& sample: stats)
+                {
+                    labjack->publish_sample(&sample);
+                }
             }
             nscans_in_sample = 0;
         }

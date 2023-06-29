@@ -16,19 +16,63 @@
 
             <!-- <serialSensor class="LabJackSensor" id="500" devicename="usock::32950"> -->
             <serialSensor class="DSMSerialSensor" id="500" devicename="usock::32950">
+                <!--
+                    Since the LabJackSensor generates samples which are arrays
+                    of floating point measurements, one array for each
+                    channel, adopt a strategy of numbering the samples so each
+                    channel gets its own sample id.  That way the values in
+                    the sample are only the values for that channel, and there
+                    is no need to try to decode where each channel starts.
+                    Also the samples for particular channels are easily
+                    selected by id, regardless of how many channels were being
+                    recorded when.
+
+                    PPS count average is 1, series is 2.
+                    Channel stats are 10, 11, 12, or 10 + channel number.
+                    Channel series are 20, 21, 22, or 20 + channel number.
+
+                    The samples will nominally always have 2000 values, but if
+                    that changed it would be easy to tell in the sample sizes.
+                -->
                 <sample id="1" rate="1">
-                    <variable name="ch0_avg" units="V" longname="Channel 0 1-second mean"/>
-                    <variable name="ch1_avg" units="V" longname="Channel 1 1-second mean"/>
-                    <variable name="ch2_avg" units="V" longname="Channel 2 1-second mean"/>
-                    <variable name="ch3_avg" units="V" longname="Channel 3 1-second mean"/>
-                    <variable name="pps_count_avg" units="1" longname="PPS counter"/>
+                    <variable name="pps_count" units="1" longname="PPS counter"/>
+                    <variable name="pps_step" units="1" longname="Index of PPS count change"/>
+                    <variable name="backlog_pct" units="0.01" longname="Buffer backlog as %"/>
                 </sample>
                 <sample id="2" rate="1">
-                    <variable name="ch0" units="V" longname="Channel 0 1-second mean"/>
-                    <variable name="ch1" units="V" longname="Channel 1 1-second mean"/>
-                    <variable name="ch2" units="V" longname="Channel 2 1-second mean"/>
-                    <variable name="ch3" units="V" longname="Channel 3 1-second mean"/>
-                    <variable name="pps_count" units="1" longname="PPS counter"/>
+                    <variable name="pps_counter" units="1" longname="PPS counter series"/>
+                </sample>
+                <sample id="10" rate="1">
+                    <variable name="ch0_avg" units="V" longname="Channel 0 1-second mean"/>
+                    <variable name="ch0_min" units="V" longname="Channel 0 1-second min"/>
+                    <variable name="ch0_max" units="V" longname="Channel 0 1-second max"/>
+                </sample>
+                <sample id="11" rate="1">
+                    <variable name="ch1_avg" units="V" longname="Channel 1 1-second mean"/>
+                    <variable name="ch1_min" units="V" longname="Channel 1 1-second min"/>
+                    <variable name="ch1_max" units="V" longname="Channel 1 1-second max"/>
+                </sample>
+                <sample id="12" rate="1">
+                    <variable name="ch2_avg" units="V" longname="Channel 2 1-second mean"/>
+                    <variable name="ch2_min" units="V" longname="Channel 2 1-second min"/>
+                    <variable name="ch2_max" units="V" longname="Channel 2 1-second max"/>
+                </sample>
+                <sample id="13" rate="1">
+                    <variable name="ch3_avg" units="V" longname="Channel 3 1-second mean"/>
+                    <variable name="ch3_min" units="V" longname="Channel 3 1-second min"/>
+                    <variable name="ch3_max" units="V" longname="Channel 3 1-second max"/>
+                </sample>
+                <sample id="20" rate="1">
+                    <variable name="ch0" units="V" longname="Channel 0 1-second series"/>
+                </sample>
+                <sample id="21" rate="1">
+                    <variable name="ch1" units="V" longname="Channel 1 1-second series"/>
+                </sample>
+                <sample id="22" rate="1">
+                    <variable name="ch2" units="V" longname="Channel 2 1-second series"/>
+                </sample>
+                <sample id="23" rate="1">
+                    <variable name="ch3" units="V" longname="Channel 3 1-second series"/>
                 </sample>
             </serialSensor>
 
