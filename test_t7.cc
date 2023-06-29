@@ -9,6 +9,8 @@
 #include <exception>
 #include <memory>
 
+#include <pthread.h>
+
 #include <nidas/core/Project.h>
 #include <nidas/core/DSMConfig.h>
 #include <nidas/core/NidasApp.h>
@@ -186,6 +188,7 @@ public:
     int IPAddress = 0;
     int Port = 0;
     int MaxBytesPerMB = 0;
+    bool Diagnostics = false;
 
     // Addresses for the channels.
     vector<int> aScanList;
@@ -448,11 +451,46 @@ int main(int argc, char *argv[])
 #endif
 
 
+void
+setProcessPriority()
+{
+    // We could use something like nidas Thread::setRealTimeFIFOPriority(),
+    // except that only works on Thread instances.  So do the equivalent
+    // directly with pthread calls.  We could also use nice() and
+    // setpriority(), but I think this is the only way to change the
+    // scheduling policy to FIFO.  Change the scheduling before changing the
+    // user, in case this is relying on starting up as root to have
+    // permissions to set real-time priority.
+    sched_param priority{50};
+    int policy = SCHED_FIFO;
+    int result = pthread_setschedparam(pthread_self(), policy, &priority);
+    if (result != 0)
+    {
+        PLOG(("could not set FIFO sched policy with priority ")
+             << priority.sched_priority << ": " << strerror(errno));
+    }
+    result = pthread_getschedparam(pthread_self(), &policy, &priority);
+    if (result != 0)
+    {
+        PLOG(("could not get thread sched parameters: ")
+             << strerror(errno));
+    }
+    else{
+        ILOG(("") << "thread policy=" << policy
+                  << ", priority=" << priority.sched_priority);
+    }
+}
+
+
 int main(int argc, char const *argv[])
 {
     NidasApp app("test_t7");
     NidasAppArg ReadCount("-n,--number", "COUNT",
                           "Stop after COUNT reads, unless 0", "0");
+    NidasAppArg Diagnostics("--diag", "",
+R"""(Enable LabJack Stream diagnostics.
+Data are scanned for skipped values, which are reported if found.
+For TCP streams, buffer statistics are queried and reported.)""");
     Logger* logger = Logger::getInstance();
     LogConfig lc("info");
     logger->setScheme(logger->getScheme("default").addConfig(lc));
@@ -464,8 +502,9 @@ int main(int argc, char const *argv[])
     try {
         app.XmlHeaderFile.setRequired();
         app.Hostname.setRequired();
-        app.enableArguments(app.XmlHeaderFile | app.OutputFiles | app.Hostname |
-                            ReadCount | app.Help | app.Version | app.loggingArgs());
+        app.enableArguments(app.XmlHeaderFile | app.Hostname |
+                            ReadCount | app.Username | Diagnostics |
+                            app.Help | app.Version | app.loggingArgs());
         app.parseArgs(argc, argv);
         if (app.helpRequested())
         {
@@ -481,6 +520,9 @@ int main(int argc, char const *argv[])
         std::cerr << appx.toString() << std::endl;
         return 1;
     }
+
+    setProcessPriority();
+    app.setupProcess();
 
     // May as well load a project xml to get the project-specific info for the
     // header.
@@ -603,8 +645,8 @@ stream()
     SampleT<float> pps_stats;
     pps_stats.setDSMId(DSMID);
     pps_stats.setSpSId(SENSORID + 1);
-    pps_stats.allocateData(3);
-    pps_stats.setDataLength(3);
+    pps_stats.allocateData(5);
+    pps_stats.setDataLength(5);
 
     SampleT<float> stats[numChannels-1];
     for (auto& sample: stats)
@@ -649,11 +691,13 @@ stream()
         err = LJM_eStreamRead(handle, aData.data(), &deviceScanBacklog,
             &LJMScanBacklog);
         dsm_time_t after = nidas::util::getSystemTime();
+        float read_time_ms = (after - before) / USECS_PER_MSEC;
         DLOG(("LJM_eStreamRead: ") << "completed in "
-             << (after-before) << " usecs");
+             << read_time_ms << " ms");
         check_error(err, "LJM_eStreamRead");
 
-        if (ConnectionType != LJM_ctUSB) {
+        if (Diagnostics && ConnectionType != LJM_ctUSB)
+        {
             err = LJM_GetStreamTCPReceiveBufferStatus(handle,
                 &receiveBufferBytesSize, &receiveBufferBytesBacklog);
             check_error(err, "LJM_GetStreamTCPReceiveBufferStatus");
@@ -690,13 +734,16 @@ stream()
             }
         }
 
-        numSkippedScans = CountAndOutputNumSkippedScans(numChannels,
-            scansPerRead, aData.data());
+        if (Diagnostics)
+        {
+            numSkippedScans = CountAndOutputNumSkippedScans(numChannels,
+                scansPerRead, aData.data());
 
-        if (numSkippedScans) {
-            ILOG(("  %d skipped scans in this LJM_eStreamRead",
-                  numSkippedScans));
-            totalSkippedScans += numSkippedScans;
+            if (numSkippedScans) {
+                PLOG(("  %d skipped scans in this LJM_eStreamRead",
+                    numSkippedScans));
+                totalSkippedScans += numSkippedScans;
+            }
         }
 
         // Fill the sample for each channel.
@@ -769,7 +816,9 @@ stream()
             float* pps_vars = pps_stats.getDataPtr();
             pps_vars[0] = pps_count;
             pps_vars[1] = pps_step;
-            pps_vars[2] = backlog_pct;
+            pps_vars[2] = deviceScanBacklog;
+            pps_vars[3] = LJMScanBacklog;
+            pps_vars[4] = read_time_ms;
             static LogContext lp(LOG_DEBUG);
             if (lp.active())
             {

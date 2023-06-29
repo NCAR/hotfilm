@@ -35,9 +35,16 @@
                     that changed it would be easy to tell in the sample sizes.
                 -->
                 <sample id="1" rate="1">
-                    <variable name="pps_count" units="1" longname="PPS counter"/>
-                    <variable name="pps_step" units="1" longname="Index of PPS count change"/>
-                    <variable name="backlog_pct" units="0.01" longname="Buffer backlog as %"/>
+                    <variable name="pps_count" units="1"
+                              longname="PPS counter"/>
+                    <variable name="pps_step" units="1"
+                              longname="Index of PPS count change"/>
+                    <variable name="device_scan_backlog" units="1"
+                              longname="Number of scans left in device buffer"/>
+                    <variable name="host_scan_backlog" units="1"
+                              longname="Number of scans left in host buffer"/>
+                    <variable name="read_time" units="milliseconds"
+                              longname="Stream read call time"/>
                 </sample>
                 <sample id="2" rate="1">
                     <variable name="pps_counter" units="1" longname="PPS counter series"/>
