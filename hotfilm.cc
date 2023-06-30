@@ -785,11 +785,50 @@ stream()
             // if timestamp has not been set, because there have been no pps
             // transitions, or else if it has not changed since the last
             // sample, then use after minus one second.
-            if (!timestamp || timestamp == pps_stats.getTimeTag())
+            if (!timestamp || pps_step == -1)
             {
-                PLOG(("") << "no pps count, using approximate time tag");
+                PLOG(("") << "no pps step detected in last second, "
+                             "approximating time tag");
                 timestamp = after - USECS_PER_SEC;
             }
+            else
+            {
+                // check the difference between the last sample and the time
+                // tag to be used for this next sample; expect it to be close
+                // to 1.0 seconds. If instead it's close to 0 or 2, then
+                // assume the wrong system time was truncated, and adjust by 1
+                // second.  Otherwise use what was calculated for the given
+                // step.
+                dsm_time_t diff = timestamp - pps_stats.getTimeTag();
+                dsm_time_t adjust = 0;
+                // expect a really tight fit for being off by one second in
+                // either direction, no more than one scan, otherwise
+                // something else could be wrong.
+                const dsm_time_t threshold = 500 /*microseconds*/;
+                if (abs(diff) <= threshold)
+                {
+                    adjust += USECS_PER_SEC;
+                }
+                else if (abs(diff - 2*USECS_PER_SEC) < threshold)
+                {
+                    adjust -= USECS_PER_SEC;
+                }
+                if (adjust)
+                {
+                    timestamp += adjust;
+                    PLOG(("") << "pps step detected but timestamp is off by "
+                              << diff << "usecs, "
+                              << "adjusted towards expected value: "
+                              << UTime(timestamp).format(true, "%H:%M:%S.%4f"));
+                }
+                // either the timestamp is now close to the expected value, or
+                // else it was significantly off and is being used as is.  I
+                // suppose we could use the read time (after-before) to
+                // further inform this algorithm, since we have some idea that
+                // timing is off when the reads are not taking about 500 ms...
+            }
+            pps_stats.setTimeTag(timestamp);
+
             // no stats sample for the pps counter first in scan list
             series[0].setTimeTag(timestamp);
             for (unsigned int channel = 1; channel < numChannels; ++channel)
@@ -811,7 +850,6 @@ stream()
                 vars[1] = min;
                 vars[2] = max;
             }
-            pps_stats.setTimeTag(timestamp);
             float* pps_vars = pps_stats.getDataPtr();
             pps_vars[0] = pps_count;
             pps_vars[1] = pps_step;
