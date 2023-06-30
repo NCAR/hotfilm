@@ -204,6 +204,21 @@ buffer is read, then the system time could advance to the next second, past
 the second corresponding to the PPS pulse in the counter channel.  This would
 be evident by a 2-second difference between successive sample times.
 
+This 0-second or 2-second difference is detected by the time tag algorithm,
+and the time tag is adjusted to align it with the expected time tag.  However,
+this has some risk.  If the very first timestamp is off by a second, then all
+subsequent timestamps will keep being adjusted and will also be off by one
+second.
+
+Just in case such a situation ever needs to be detected and corrected, the
+difference between the timestamp and the system time is stored in the PPS
+statistics sample as variable `timetag_to_system`.  Adding that value to the
+sample time tag yields the system time that was returned after the stream read
+completed.  That is the time from which the sample time tag is derived, either
+by backing off according to `pps_step`, or else by backing off a full second
+from the system time after the second read a get an approximate start of the
+scans in the previous read.
+
 Here are a few thoughts about how to guard against time tag errors from such a
 significant delay, if it were to become a problem.  There could be a check
 that the system time "seems reasonable" relative to the previous sample time

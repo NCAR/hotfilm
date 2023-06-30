@@ -645,8 +645,8 @@ stream()
     SampleT<float> pps_stats;
     pps_stats.setDSMId(DSMID);
     pps_stats.setSpSId(SENSORID + 1);
-    pps_stats.allocateData(5);
-    pps_stats.setDataLength(5);
+    pps_stats.allocateData(6);
+    pps_stats.setDataLength(6);
 
     SampleT<float> stats[numChannels-1];
     for (auto& sample: stats)
@@ -679,6 +679,7 @@ stream()
     int pps_count = -1;
     int pps_step = -1;
     double backlog_pct = 0;
+    dsm_time_t timestamp_to_after{0};
     for (iteration = 0; numReads == 0 || iteration < numReads; iteration++)
     {
         // Get a timestamp before the read and after to get stats on how long
@@ -771,6 +772,7 @@ stream()
                              << ", timestamp adjusted to "
                              << UTime(timestamp).format(true, "%H:%M:%S.%4f"));
                         pps_count = *idp;
+                        timestamp_to_after = after - timestamp;
                     }
                 }
                 *(sdp++) = *idp;
@@ -790,6 +792,7 @@ stream()
                 PLOG(("") << "no pps step detected in last second, "
                              "approximating time tag");
                 timestamp = after - USECS_PER_SEC;
+                timestamp_to_after = after - timestamp;
             }
             else
             {
@@ -816,6 +819,7 @@ stream()
                 if (adjust)
                 {
                     timestamp += adjust;
+                    timestamp_to_after -= adjust;
                     PLOG(("") << "pps step detected but timestamp is off by "
                               << diff << "usecs, "
                               << "adjusted towards expected value: "
@@ -856,6 +860,7 @@ stream()
             pps_vars[2] = deviceScanBacklog;
             pps_vars[3] = LJMScanBacklog;
             pps_vars[4] = read_time_ms;
+            pps_vars[5] = timestamp_to_after;
             static LogContext lp(LOG_DEBUG);
             if (lp.active())
             {
@@ -884,6 +889,7 @@ stream()
             // reset pps step index to make sure it is not used again in the
             // next samples, it has to be set on the next pps count change.
             pps_step = -1;
+            timestamp_to_after = 0;
         }
     }
     if (totalSkippedScans) {

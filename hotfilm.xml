@@ -45,6 +45,8 @@
                               longname="Number of scans left in host buffer"/>
                     <variable name="read_time" units="milliseconds"
                               longname="Stream read call time"/>
+                    <variable name="timetag_to_system" units="microseconds"
+                              longname="Difference from sample time to system time after read"/>
                 </sample>
                 <sample id="2" rate="1">
                     <variable name="pps_counter" units="1" longname="PPS counter series"/>
