@@ -771,7 +771,6 @@ stream()
                              << ", timestamp adjusted to "
                              << UTime(timestamp).format(true, "%H:%M:%S.%4f"));
                         pps_count = *idp;
-
                     }
                 }
                 *(sdp++) = *idp;
@@ -844,6 +843,9 @@ stream()
                 }
             }
             nscans_in_sample = 0;
+            // reset pps step index to make sure it is not used again in the
+            // next samples, it has to be set on the next pps count change.
+            pps_step = -1;
         }
     }
     if (totalSkippedScans) {

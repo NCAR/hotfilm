@@ -74,9 +74,13 @@ Exception: EOFException: hotfilm_20230629_203645.dat: open: EOF
 
 Sample 501 has 5 variables:
 
-- PPS count: latest counter value for the PPS DIO channel.
-- PPS index (aka step): index of the counter change in the last read buffer
-  (out of 1000 samples, half the scan rate)
+- PPS count: latest counter value for the PPS DIO channel.  This will be 0 if
+  no PPS pulses have been ever counted by the LabJack.  It should normally
+  increment by one for each sample.
+- PPS index (aka step): index of the counter change (PPS pulse) in the scans
+  in the 1-second sample, from 0 to 1999.  If -1, then no change in the PPS
+  counter was detected in this sample, so the time tags were not adjusted to
+  synchronize with the PPS time.
 - Device scan backlog: scans left in the device buffer after the last read;
   should be near zero and not increasing.
 - Host scan backlog: scans still in the host-side buffer; should be near zero
@@ -157,7 +161,7 @@ DIO0_EF_INDEX=8
 DIO0_EF_ENABLE=1
 ```
 
-then `DIO0_EF_READ_A` will be the current counter, and that channel can be
+Then `DIO0_EF_READ_A` will be the current counter, and that channel can be
 streamed also.
 
 - [DIO extended features page](https://labjack.com/pages/support?doc=%2Fdatasheets%2Ft-series-datasheet%2F132-dio-extended-features-t-series-datasheet%2F)
@@ -176,6 +180,49 @@ the PPS.  If the counter synchronization proves reliable, then the full
 counter stream could be left out of the recorded data to at least avoid that
 overhead.
 
+### Time tagging
+
+If a change in the PPS counter is detected in the scans for that channel, the
+sample time tags for all the channels are computed relative to that specific
+scan, called the `pps_step` in the code and assigned that variable name in the
+output sample tags.  The step index is -1 if a change in the counter was not
+detected in the last 2000 scans, otherwise it is in the interval 0-1999.
+
+If the counter changed value in the last read buffer, covering the last
+half-second, then the current system second should be the second at which the
+pulse happened, as long as the system time is acquired within a half-second
+after the read returns.  To compute the start of the sample, the system time
+is truncated to the even second, then that time is decremented by the amount
+of time represented by the step index, `pps_step/2000`.  The sample data are
+not shifted in any way so that the sample time falls on an even second.
+Instead the time tag is adjusted so that the time of the sample at `pps_step`
+falls on the even second, since that is when the pulse happens.
+
+If there is ever a significant delay, more than half a second, between the
+last scan in the LabJack buffer and the return of the system time after the
+buffer is read, then the system time could advance to the next second, past
+the second corresponding to the PPS pulse in the counter channel.  This would
+be evident by a 2-second difference between successive sample times.
+
+Here are a few thoughts about how to guard against time tag errors from such a
+significant delay, if it were to become a problem.  There could be a check
+that the system time "seems reasonable" relative to the previous sample time
+and the value of `pps_step`.  Or, since the time spent in the read is likely
+to coincide with the time covered by the count, then maybe the average of the
+system time before and after the stream read would be a better starting point
+to determine the time at the PPS pulse, perhaps interpolated by  the step
+index so the time `after` the read returns is more heavily weighted the larger
+the step index.  This seems risky, though, since there is a chance the time
+`before` the read could pull the estimated system time of the pulse into the
+previous second.  The interpolated time might have to be incremented by a
+half-second before being truncated.
+
+It might also help to read the scan buffer more often.  The recommendation in
+the LabJack Stream examples is to read 1/2 the scan rate at a time.  However,
+maybe reading 1/4 at a time makes it more likely to detect the count change in
+the right second of system time, since there is then 3/4 of a second between
+the last scan being read and when the system time call must return.
+
 ### Differential
 
 All the analog inputs are configured as differentials, so each channel
@@ -192,4 +239,3 @@ LJM provides the option to read 16-bit data instead of converting to float on
 the host side.  However, there does not seem to be any disadvantage to
 recording the data already scaled to Volts.  One downside is that 32-bit
 floats take twice as much space, but that is unlikely to be a problem.
-
