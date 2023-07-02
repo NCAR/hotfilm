@@ -170,17 +170,30 @@ public:
     // How fast to stream in Hz
     double INIT_SCAN_RATE = 2000;
 
+    int STREAM_TRIGGER_INDEX = 0;
+    int STREAM_CLOCK_SOURCE = 0;
+    int STREAM_RESOLUTION_INDEX = 8;
+    double STREAM_SETTLING_US = 0;
+    double AIN_ALL_RANGE = 0;
+
     // How many scans to get per call to LJM_eStreamRead. INIT_SCAN_RATE/2 is
     // recommended
     int SCANS_PER_READ = INIT_SCAN_RATE / 2;
 
     // How many times to call LJM_eStreamRead before calling LJM_eStreamStop
-    int NUM_READS = 10;
+    int NUM_READS = 0;
 
-    // Channels/Addresses to stream.  The counter is always first.
-    std::vector<std::string> channel_names{
-        "DIO0_EF_READ_A", "AIN0", "AIN2", "AIN4", "AIN6"
+    int NUM_CHANNELS = 4;
+    bool ENABLE_PPS_COUNTER = true;
+
+    std::string counter_channel = "DIO0_EF_READ_A";
+
+    std::vector<std::string> ain_channels{
+        "AIN0", "AIN2", "AIN4", "AIN6"
     };
+
+    // The channel names that will be scanned.
+    std::vector<std::string> channel_names;
 
     int DeviceType = -1;
     int ConnectionType = -1;
@@ -272,11 +285,20 @@ int
 HotFilm::
 get_channel_addresses()
 {
-    // cache the addresses for the channel names
+    // build up the channel scan list and channel addresses
     vector<const char*> names;
-    // pps counter is always first
-    for (unsigned int i = 0; i < channel_names.size(); ++i)
-        names.push_back(channel_names[i].c_str());
+    // pps counter is always first if enabled
+    channel_names.clear();
+    if (ENABLE_PPS_COUNTER)
+    {
+        channel_names.push_back(counter_channel);
+        names.push_back(counter_channel.c_str());
+    }
+    for (int i = 0; i < NUM_CHANNELS; ++i)
+    {
+        channel_names.push_back(ain_channels[i]);
+        names.push_back(ain_channels[i].c_str());
+    }
     unsigned int nchannels = names.size();
     aScanList.resize(nchannels);
     aScanTypes.resize(nchannels);
@@ -290,12 +312,6 @@ void
 HotFilm::
 configure_stream()
 {
-    const int STREAM_TRIGGER_INDEX = 0;
-    const int STREAM_CLOCK_SOURCE = 0;
-    const int STREAM_RESOLUTION_INDEX = 0;
-    const double STREAM_SETTLING_US = 0;
-    const double AIN_ALL_RANGE = 0;
-
     ILOG(("Making sure stream is stopped."));
     int err = LJM_eStreamStop(handle);
     if (err)
@@ -334,11 +350,13 @@ configure_stream()
     const int AIN_ALL_NEGATIVE_CH = 1;
     set_name(handle, "AIN_ALL_NEGATIVE_CH", AIN_ALL_NEGATIVE_CH);
 
+    // I presume there's no harm in configuring an input as a counter even if
+    // it's not going to be scanned, but leave it disabled just in case...
     DLOG(("setting up counter on DIO0 (FIO0)..."));
     set_name(handle, "DIO0_EF_ENABLE", 0);
     set_name(handle, "DIO0_EF_INDEX", 8);
-    set_name(handle, "DIO0_EF_ENABLE", 1);
-
+    if (ENABLE_PPS_COUNTER)
+        set_name(handle, "DIO0_EF_ENABLE", 1);
 }
 
 
@@ -491,6 +509,16 @@ int main(int argc, char const *argv[])
 R"""(Enable LabJack Stream diagnostics.
 Data are scanned for skipped values, which are reported if found.
 For TCP streams, buffer statistics are queried and reported.)""");
+
+    NidasAppArg DisablePPS("--nopps", "",
+        "Do not scan the PPS counter, timestamps will be unsynchronized.");
+    NidasAppArg NumChannels("--channels", "N",
+                            "Scan first N channels: AIN0, AIN2, AIN4, AIN6.",
+                            "4");
+    NidasAppArg ResolutionIndex("--resolution", "INDEX",
+                                "Set the LabJack resolution INDEX, 0-8", "8");
+    NidasAppArg ScanRate("--scanrate", "HZ", "Scan rate in Hz", "2000");
+
     Logger* logger = Logger::getInstance();
     LogConfig lc("info");
     logger->setScheme(logger->getScheme("default").addConfig(lc));
@@ -502,7 +530,9 @@ For TCP streams, buffer statistics are queried and reported.)""");
     try {
         app.XmlHeaderFile.setRequired();
         app.Hostname.setDefault("hotfilm");
-        app.enableArguments(app.XmlHeaderFile | app.Hostname |
+        app.enableArguments(DisablePPS | NumChannels | ResolutionIndex |
+                            ScanRate |
+                            app.XmlHeaderFile | app.Hostname |
                             ReadCount | app.Username | Diagnostics |
                             app.Help | app.Version | app.loggingArgs());
         app.parseArgs(argc, argv);
@@ -514,6 +544,17 @@ For TCP streams, buffer statistics are queried and reported.)""");
         }
         app.checkRequiredArguments();
         hf.NUM_READS = ReadCount.asInt();
+        hf.STREAM_RESOLUTION_INDEX = ResolutionIndex.asInt();
+        hf.ENABLE_PPS_COUNTER = !DisablePPS.asBool();
+        hf.NUM_CHANNELS = NumChannels.asInt();
+        hf.INIT_SCAN_RATE = ScanRate.asFloat();
+        hf.SCANS_PER_READ = hf.INIT_SCAN_RATE / 2;
+
+        ILOG(("") << "nchannels=" << hf.NUM_CHANNELS
+                  << ", resolution=" << hf.STREAM_RESOLUTION_INDEX
+                  << ", scanrate=" << hf.INIT_SCAN_RATE
+                  << ", scans_per_read=" << hf.SCANS_PER_READ
+                  << ", pps=" << (hf.ENABLE_PPS_COUNTER ? "on" : "off"));
     }
     catch (NidasAppException& appx)
     {
@@ -755,7 +796,7 @@ stream()
             double* idp = aData.data() + channel;
             for (int scan = 0; scan < scansPerRead; ++scan)
             {
-                if (channel == 0)
+                if (channel == 0 && ENABLE_PPS_COUNTER)
                 {
                     // look for a pps counter change.
                     if (pps_count == -1)
@@ -834,8 +875,10 @@ stream()
             pps_stats.setTimeTag(timestamp);
 
             // no stats sample for the pps counter first in scan list
-            series[0].setTimeTag(timestamp);
-            for (unsigned int channel = 1; channel < numChannels; ++channel)
+            unsigned int channel = 0;
+            if (ENABLE_PPS_COUNTER)
+                series[channel++].setTimeTag(timestamp);
+            for ( ; channel < numChannels; ++channel)
             {
                 float min{0}, max{0};
                 series[channel].setTimeTag(timestamp);
@@ -875,6 +918,9 @@ stream()
             }
             if (labjack)
             {
+                // could decide not to publish the pps_stats if pps counter is
+                // disabled, but leave it for now as a reminder that the
+                // timestamps are not sync'd.
                 labjack->publish_sample(&pps_stats);
                 for (auto& sample: series)
                 {
