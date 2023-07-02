@@ -5,14 +5,13 @@ import numpy as np
 from pathlib import Path
 import time
 import logging
-
-import pandas as pd
 import re
 
 
 logger = logging.getLogger(__name__)
 
 
+# this is the data_dump prefix without the delta column
 _prefix = "2023 06 30 21:59:27.8075 200, 521    8000"
 
 
@@ -23,6 +22,9 @@ _prefix_rx = re.compile(
 
 
 class ReadHotfilm:
+    """
+    Read the hotfilm 1-second time series from data_dump.
+    """
 
     def __init__(self):
         self.source = "sock:192.168.1.205"
@@ -32,6 +34,8 @@ class ReadHotfilm:
         self.channel = 0
         # insert a delay between samples read from a file
         self.delay = 0
+        # set to true to return the spectrum instead of the time series
+        self.spectrum = False
 
     def set_source(self, source):
         logger.info("setting source: %s", source)
@@ -61,6 +65,8 @@ class ReadHotfilm:
             line = self.dd.stdout.readline()
         if line:
             data = np.fromstring(match.group('data'), dtype=float, sep=' ')
+            if self.spectrum:
+                data = np.abs(np.fft.rfft(data - np.mean(data)))
             if (self.delay):
                 time.sleep(self.delay)
             logger.debug(data)

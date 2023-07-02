@@ -6,7 +6,7 @@ from random import random
 from bokeh.models import ColumnDataSource
 from bokeh.plotting import curdoc, figure
 from bokeh.layouts import layout
-from bokeh.models import Div, Spinner
+from bokeh.models import Div, Spinner, Dropdown
 
 import numpy as np
 
@@ -84,14 +84,30 @@ spinner = Spinner(
     )
 
 
-def update_data(attrname, old, new):
+dropdown = Dropdown(label="Time",
+                    menu=[("Time", "time"),
+                          ("Frequency", "frequency")])
+
+
+def update_channel(attrname, old, new):
     hf.select_channel(new)
 
 
-spinner.on_change('value', update_data)
+def select_domain(domain):
+    if domain == "time":
+        hf.spectrum = False
+        dropdown.update(label="Time")
+    else:
+        hf.spectrum = True
+        dropdown.update(label="Frequency")
+
+
+spinner.on_change('value', update_channel)
+dropdown.on_click(lambda event: select_domain(event.item))
+
 
 layout = layout([
-    [div, spinner],
+    [div, spinner, dropdown],
     [plot],
 ])
 
