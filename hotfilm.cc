@@ -173,8 +173,8 @@ public:
     int STREAM_TRIGGER_INDEX = 0;
     int STREAM_CLOCK_SOURCE = 0;
     int STREAM_RESOLUTION_INDEX = 8;
-    double STREAM_SETTLING_US = 0;
-    double AIN_ALL_RANGE = 0;
+    double STREAM_SETTLING_US = 1000;
+    double AIN_ALL_RANGE = 10;
 
     // How many scans to get per call to LJM_eStreamRead. INIT_SCAN_RATE/2 is
     // recommended
@@ -183,6 +183,7 @@ public:
     // How many times to call LJM_eStreamRead before calling LJM_eStreamStop
     int NUM_READS = 0;
 
+    // Number of analog channels that will be scanned.
     int NUM_CHANNELS = 4;
     bool ENABLE_PPS_COUNTER = true;
 
@@ -287,17 +288,17 @@ get_channel_addresses()
 {
     // build up the channel scan list and channel addresses
     vector<const char*> names;
-    // pps counter is always first if enabled
     channel_names.clear();
-    if (ENABLE_PPS_COUNTER)
-    {
-        channel_names.push_back(counter_channel);
-        names.push_back(counter_channel.c_str());
-    }
     for (int i = 0; i < NUM_CHANNELS; ++i)
     {
         channel_names.push_back(ain_channels[i]);
         names.push_back(ain_channels[i].c_str());
+    }
+    // pps counter is always first if enabled
+    if (ENABLE_PPS_COUNTER)
+    {
+        channel_names.push_back(counter_channel);
+        names.push_back(counter_channel.c_str());
     }
     unsigned int nchannels = names.size();
     aScanList.resize(nchannels);
@@ -518,6 +519,9 @@ For TCP streams, buffer statistics are queried and reported.)""");
     NidasAppArg ResolutionIndex("--resolution", "INDEX",
                                 "Set the LabJack resolution INDEX, 0-8", "8");
     NidasAppArg ScanRate("--scanrate", "HZ", "Scan rate in Hz", "2000");
+    NidasAppArg SettlingTime("--settle", "US",
+                             "Settling time in microseconds", "0");
+    NidasAppArg Range("--range", "V", "Upper limit in Volts", "10");
 
     Logger* logger = Logger::getInstance();
     LogConfig lc("info");
@@ -531,7 +535,7 @@ For TCP streams, buffer statistics are queried and reported.)""");
         app.XmlHeaderFile.setRequired();
         app.Hostname.setDefault("hotfilm");
         app.enableArguments(DisablePPS | NumChannels | ResolutionIndex |
-                            ScanRate |
+                            ScanRate | SettlingTime | Range |
                             app.XmlHeaderFile | app.Hostname |
                             ReadCount | app.Username | Diagnostics |
                             app.Help | app.Version | app.loggingArgs());
@@ -549,12 +553,16 @@ For TCP streams, buffer statistics are queried and reported.)""");
         hf.NUM_CHANNELS = NumChannels.asInt();
         hf.INIT_SCAN_RATE = ScanRate.asFloat();
         hf.SCANS_PER_READ = hf.INIT_SCAN_RATE / 2;
+        hf.STREAM_SETTLING_US = SettlingTime.asFloat();
+        hf.AIN_ALL_RANGE = Range.asFloat();
 
         ILOG(("") << "nchannels=" << hf.NUM_CHANNELS
                   << ", resolution=" << hf.STREAM_RESOLUTION_INDEX
                   << ", scanrate=" << hf.INIT_SCAN_RATE
                   << ", scans_per_read=" << hf.SCANS_PER_READ
-                  << ", pps=" << (hf.ENABLE_PPS_COUNTER ? "on" : "off"));
+                  << ", pps=" << (hf.ENABLE_PPS_COUNTER ? "on" : "off")
+                  << ", settling=" << hf.STREAM_SETTLING_US
+                  << ", range=" << hf.AIN_ALL_RANGE);
     }
     catch (NidasAppException& appx)
     {
@@ -670,15 +678,23 @@ stream()
     int DSMID = 200;
     int SENSORID = 500;
 
-    SampleT<float> series[numChannels];
+    // if PPS counter is enabled, then conter_index is the index of the
+    // counter in the scan list, ie, the last channel.  Otherwise it is -1.
+    int counter_index = -1;
+    if (ENABLE_PPS_COUNTER)
+        counter_index = numChannels - 1;
+
+    vector< SampleT<float> > series{numChannels};
     for (auto& sample: series)
     {
         // Each series 
-        unsigned int i = &sample - series;
+        int i = &sample - series.data();
         // we could try to pull these from the sample tag from the xml, but
         // for now just hardcode it.
         sample.setDSMId(DSMID);
-        sample.setSpSId(SENSORID + ((i == 0) ? 2 : 20 + i - 1));
+        sample.setSpSId(SENSORID + 20 + i);
+        if (i == counter_index)
+            sample.setSpSId(SENSORID + 2);
         sample.allocateData(samples_per_second);
         sample.setDataLength(samples_per_second);
     }
@@ -689,11 +705,14 @@ stream()
     pps_stats.allocateData(6);
     pps_stats.setDataLength(6);
 
-    SampleT<float> stats[numChannels-1];
+    // stats are only for the analog channels, not the counter channel
+    int numAnalog = numChannels;
+    numAnalog -= int(ENABLE_PPS_COUNTER);
+    vector< SampleT<float> > stats(numAnalog);
     for (auto& sample: stats)
     {
         // 3 variables each: avg/min/max
-        unsigned int i = &sample - stats;
+        unsigned int i = &sample - stats.data();
         sample.setDSMId(DSMID);
         sample.setSpSId(SENSORID + 10 + i);
         sample.allocateData(3);
@@ -789,14 +808,14 @@ stream()
         }
 
         // Fill the sample for each channel.
-        for (unsigned int channel = 0; channel < numChannels; ++channel)
+        for (int channel = 0; channel < (int)numChannels; ++channel)
         {
             float* sdp = series[channel].getDataPtr();
             sdp += nscans_in_sample;
             double* idp = aData.data() + channel;
             for (int scan = 0; scan < scansPerRead; ++scan)
             {
-                if (channel == 0 && ENABLE_PPS_COUNTER)
+                if (channel == counter_index)
                 {
                     // look for a pps counter change.
                     if (pps_count == -1)
@@ -874,14 +893,13 @@ stream()
             }
             pps_stats.setTimeTag(timestamp);
 
-            // no stats sample for the pps counter first in scan list
-            unsigned int channel = 0;
-            if (ENABLE_PPS_COUNTER)
-                series[channel++].setTimeTag(timestamp);
-            for ( ; channel < numChannels; ++channel)
+            int achannel = 0;
+            for (int channel = 0; channel < (int)numChannels; ++channel)
             {
-                float min{0}, max{0};
                 series[channel].setTimeTag(timestamp);
+                if (channel == counter_index)
+                    continue;
+                float min{0}, max{0};
                 float* sdp = series[channel].getDataPtr();
                 double sum = 0;
                 for (unsigned int scan = 0; scan < samples_per_second; ++scan)
@@ -891,11 +909,12 @@ stream()
                     sum += *(sdp++);
                 }
                 float mean = sum/samples_per_second;
-                stats[channel-1].setTimeTag(timestamp);
-                float* vars = stats[channel-1].getDataPtr();
+                stats[achannel].setTimeTag(timestamp);
+                float* vars = stats[achannel].getDataPtr();
                 vars[0] = mean;
                 vars[1] = min;
                 vars[2] = max;
+                ++achannel;
             }
             float* pps_vars = pps_stats.getDataPtr();
             pps_vars[0] = pps_count;
@@ -909,10 +928,11 @@ stream()
             {
                 LogMessage msg(&lp, "stats:");
                 msg << std::setprecision(3);
-                for (unsigned int i = 0; i < numChannels-1; ++i)
+                for (auto& stat: stats)
                 {
-                    float* vars = stats[i].getDataPtr();
-                    msg << " " << channel_names[i+1] << ":"
+                    int channel = &stat - stats.data();
+                    float* vars = stat.getDataPtr();
+                    msg << " " << channel_names[channel] << ":"
                         << vars[0] << "/" << vars[1] << "/" << vars[2];
                 }
             }
