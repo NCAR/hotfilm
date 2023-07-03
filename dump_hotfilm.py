@@ -64,12 +64,19 @@ class ReadHotfilm:
                 break
             line = self.dd.stdout.readline()
         if line:
-            data = np.fromstring(match.group('data'), dtype=float, sep=' ')
+            y = np.fromstring(match.group('data'), dtype=float, sep=' ')
             if self.spectrum:
-                data = np.abs(np.fft.rfft(data - np.mean(data)))
+                y = np.abs(np.fft.rfft(y - np.mean(y)))
+                # x = np.fft.fftfreq(len(y))
+                x = np.arange(0, 1, 1.0/len(y))
+            else:
+                x = np.arange(0, 1, 1.0/len(y))
             if (self.delay):
                 time.sleep(self.delay)
             logger.debug(data)
+            data = {}
+            data['x'] = x
+            data['y'] = y
         return data
 
 

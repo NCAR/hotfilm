@@ -6,7 +6,7 @@ from random import random
 from bokeh.models import ColumnDataSource
 from bokeh.plotting import curdoc, figure
 from bokeh.layouts import layout
-from bokeh.models import Div, Spinner, Dropdown
+from bokeh.models import Div, Spinner, Dropdown, Range1d
 
 import numpy as np
 
@@ -29,6 +29,7 @@ doc = curdoc()
 async def update(x, y):
     # source.stream(dict(x=x, y=y))
     source.data = dict(x=x, y=y)
+    plot.update(x_range=Range1d(x[0], x[-1]))
 
 
 def blocking_task():
@@ -53,12 +54,11 @@ if len(sys.argv) > 1:
 def read_hotfilm():
     hf.start()
     while True:
-        y = hf.get_data()
-        if y is None:
+        data = hf.get_data()
+        if data is None:
             break
         # but update the document from a callback
-        x = np.arange(0, 1, 1.0/len(y))
-        doc.add_next_tick_callback(partial(update, x=x, y=y))
+        doc.add_next_tick_callback(partial(update, x=data['x'], y=data['y']))
 
 
 plot = figure(height=600, width=1000, title="Hotfilm A/D Channels",
