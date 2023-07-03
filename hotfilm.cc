@@ -25,6 +25,7 @@
 #include <nidas/util/InvalidParameterException.h>
 
 using std::string;
+using std::to_string;
 using std::vector;
 using std::cout;
 using std::cerr;
@@ -162,8 +163,6 @@ namespace nidas { namespace dynld {
 class HotFilm
 {
 public:
-    // HotFilm();
-
     // LJM library handle for the T7 device
     int handle = -1;
 
@@ -172,8 +171,8 @@ public:
 
     int STREAM_TRIGGER_INDEX = 0;
     int STREAM_CLOCK_SOURCE = 0;
-    int STREAM_RESOLUTION_INDEX = 8;
-    double STREAM_SETTLING_US = 1000;
+    int STREAM_RESOLUTION_INDEX = 4;
+    double STREAM_SETTLING_US = 0;
     double AIN_ALL_RANGE = 10;
 
     // How many scans to get per call to LJM_eStreamRead. INIT_SCAN_RATE/2 is
@@ -503,6 +502,10 @@ setProcessPriority()
 
 int main(int argc, char const *argv[])
 {
+    LabJackSensor labjack;
+    HotFilm& hf = labjack.hotfilm;
+    hf.labjack = &labjack;
+
     NidasApp app("test_t7");
     NidasAppArg ReadCount("-n,--number", "COUNT",
                           "Stop after COUNT reads, unless 0", "0");
@@ -515,21 +518,21 @@ For TCP streams, buffer statistics are queried and reported.)""");
         "Do not scan the PPS counter, timestamps will be unsynchronized.");
     NidasAppArg NumChannels("--channels", "N",
                             "Scan first N channels: AIN0, AIN2, AIN4, AIN6.",
-                            "4");
+                            to_string(hf.NUM_CHANNELS));
     NidasAppArg ResolutionIndex("--resolution", "INDEX",
-                                "Set the LabJack resolution INDEX, 0-8", "8");
-    NidasAppArg ScanRate("--scanrate", "HZ", "Scan rate in Hz", "2000");
+                                "Set the LabJack resolution INDEX, 0-8",
+                                to_string(hf.STREAM_RESOLUTION_INDEX));
+    NidasAppArg ScanRate("--scanrate", "HZ", "Scan rate in Hz",
+                         to_string(hf.INIT_SCAN_RATE));
     NidasAppArg SettlingTime("--settle", "US",
-                             "Settling time in microseconds", "0");
-    NidasAppArg Range("--range", "V", "Upper limit in Volts", "10");
+                             "Settling time in microseconds",
+                             to_string(hf.STREAM_SETTLING_US));
+    NidasAppArg Range("--range", "V", "Upper limit in Volts",
+                      to_string(hf.AIN_ALL_RANGE));
 
     Logger* logger = Logger::getInstance();
     LogConfig lc("info");
     logger->setScheme(logger->getScheme("default").addConfig(lc));
-
-    LabJackSensor labjack;
-    HotFilm& hf = labjack.hotfilm;
-    hf.labjack = &labjack;
 
     try {
         app.XmlHeaderFile.setRequired();

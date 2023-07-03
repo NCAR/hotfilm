@@ -86,7 +86,7 @@
             </serialSensor>
 
             <output class="RawSampleOutputStream">
-                <socket type="server" port="31000" maxIdle="60" block="false"/>
+                <socket type="server" port="30000" maxIdle="60" block="false"/>
             </output>
 
             <output class="RawSampleOutputStream">
@@ -103,6 +103,21 @@
                 <mount dir="$DATAMNT"/>
                 </fileset>
             </output> -->
+
+            <processor class="StatisticsProcessor" id="31000" optional="false">
+                <sample period="1">
+                    <parameter name="type" value="mean" type="string"/>
+                    <parameter name="invars" type="strings"
+                        value="ch0_avg ch1_avg ch2_avg ch3_avg"/>
+                </sample>
+                <output class="AsciiOutput">
+                    <socket type="server" port="30006" block="false" maxIdle="60"/>
+                </output>
+                <output class="SampleOutputStream">
+                    <socket type="server" port="30001" block="false" maxIdle="60"/>
+                </output>
+            </processor>
+
 
         </dsm>
 

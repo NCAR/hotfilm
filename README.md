@@ -24,11 +24,22 @@ daq@dsm214:~/hotfilm $ sudo -s  ./hotfilm -u daq --log info --xml hotfilm.xml
 ...
 ```
 
-## Data output
+### Configuration
+
+The default settings are 4 channels at 2 KHz at the resolution index 4 (out of
+8), with the PPS counter and timestamp synchronization enabled.  See `hotfilm
+-h` for all the available command-line arguments.  Resolution index 4 has a
+maximum rate of 2.2 KHz for the LabJack T7 for 4 channels.  This is based on
+the table on the [T-series data rates
+page](https://labjack.com/pages/support?doc=%2Fdatasheets%2Ft-series-datasheet%2Fa-1-data-rates-t-series-datasheet%2F).
+
+### Data output
 
 Like for a NIDAS `dsm` process, the `hotfilm` process is configured with an
 XML file which can specify multiple sample outputs, usually a file archive and
-a sample server socket.
+a sample server socket.  The default [hotfilm.xml](hotfilm.xml) file includes
+the typical NIDAS output streams, in particular an archive file data stream
+and real-time sample output on port 30000.
 
 Unlike the sensors in a normal `dsm` process, the samples recorded by
 `hotfilm` are not raw character streams which have to be processed to generate
@@ -53,7 +64,25 @@ filter samples at best or possibly crash if `-p` is used with the files.  This
 is being fixed on the `buster` branch and will eventually be fixed in a NIDAS
 release.
 
-## Diagnostics
+### Plotting
+
+There is a python web application script, built on the bokeh framework, for
+plotting the channel data in real time.  It runs `data_dump` connected to the
+`hotfilm` sample output, parses the channel arrays, then updates them in the
+bokeh app so the web client can plot the updates in real-time.  Run the web
+application like so:
+
+```plain
+bokeh serve --show app_hotfilm.py --args sock:localhost
+```
+
+The `--show` argument automatically opens a browser window to the local app
+server instance on the right port.
+
+The browser app can plot one of the four channels in either the time or
+frequency domain, for each second of data output as a sample.
+
+### Diagnostics
 
 This is an example of using `data_dump` to show all the 1-second statistics
 and diagnostics without the full 2000-point 1-second time series:
@@ -247,10 +276,41 @@ scan list: AIN0, AIN2, AIN4, AIN6.
 
 ### Resolution
 
-The scan resolution is set to 0, the default, which should result in the
-highest possible resolution index of 8 for the 2 KHz scan rate.
+The scan resolution is set to 4 by default, the highest possible resolution
+index for the 2 KHz scan rate and 4 channels.
 
 LJM provides the option to read 16-bit data instead of converting to float on
 the host side.  However, there does not seem to be any disadvantage to
 recording the data already scaled to Volts.  One downside is that 32-bit
 floats take twice as much space, but that is unlikely to be a problem.
+
+### Interference
+
+When testing the LabJack in the lab, the power source for the LabJack seems to
+affect the digitization when also using a waveform generator.  When powered
+through a laptop, the digitized waveform signal looks clean.  When powered by
+the DSM USB or by the LabJack AC-USB adapter, the signal drops towards 0 V at
+somewhat regular intervals.  Here is an example:
+
+![Power source interference](ground-interference.png).
+
+The interference does not seem to happen without the waveform generator
+connected, regardless of the LabJack power source.  Or so we hope.
+
+## Example Data
+
+### sawtooth.dat
+
+- **channel 0**: AA battery reading ~1.7V
+- **channel 1**: sawtooth waveform 1 Vpp and 1 V offset, 50 Hz, but actually
+  reading at 2V offset and 1 Vpp
+
+LabJack was powered by the USB port on the waveform generator.
+
+### sinewave.dat
+
+- **channel 0**: hotwire through the bridge
+- **channel 1**: 990 Hz 5 mVpp sine wave
+
+The hot wire was blown on several times and then fanned it with a flat box
+lid.
