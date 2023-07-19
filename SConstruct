@@ -22,7 +22,7 @@ hotfilm = env.Program('hotfilm.cc')
 env.Default(hotfilm)
 
 dest = env.Install("$NIDAS_PATH/bin", hotfilm)
-env['SETCAP'] = '/usr/sbin/setcap'
+env['SETCAP'] = '/sbin/setcap'
 
 # The cap_net_admin prevents some warning messages about calls to
 # cap_set_proc() which technically are not needed to set the scheduling
