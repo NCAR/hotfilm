@@ -1,0 +1,17 @@
+[Unit]
+Description=Hotfilm Data Acquisition
+
+[Service]
+Type=simple
+UMask=0002
+Environment=NIDAS=/opt/nidas-dev LD_LIBRARY_PATH=/opt/nidas-dev/lib
+# The -l makes sure we get environment settings required to parse the XML.
+ExecStart=$NIDAS/bin/hotfilm --xml $HOME/hotfilm/hotfilm.xml
+
+TimeoutStartSec=5
+TimeoutStopSec=10
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target
