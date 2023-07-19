@@ -89,13 +89,6 @@
                 <socket type="server" port="31000" maxIdle="60" block="false"/>
             </output>
 
-            <!-- <output class="RawSampleOutputStream">
-                <fileset dir="."
-                        file="${DSM}_%Y%m%d_%H%M%S.dat"
-                        length="3600">
-                </fileset>
-            </output> -->
-
             <output class="RawSampleOutputStream">
                 <fileset dir="$DATAMNT/projects/${PROJECT}/raw_data"
                         file="${DSM}_%Y%m%d_%H%M%S.dat"
@@ -103,21 +96,6 @@
                 <mount dir="$DATAMNT"/>
                 </fileset>
             </output>
-
-            <processor class="StatisticsProcessor" id="31000" optional="false">
-                <sample period="1">
-                    <parameter name="type" value="mean" type="string"/>
-                    <parameter name="invars" type="strings"
-                        value="ch0_avg ch1_avg ch2_avg ch3_avg"/>
-                </sample>
-                <output class="AsciiOutput">
-                    <socket type="server" port="31006" block="false" maxIdle="60"/>
-                </output>
-                <output class="SampleOutputStream">
-                    <socket type="server" port="31001" block="false" maxIdle="60"/>
-                </output>
-            </processor>
-
 
         </dsm>
 
