@@ -5,11 +5,10 @@ Description=Hotfilm Data Acquisition
 Type=simple
 UMask=0002
 Environment=NIDAS=/opt/nidas-dev LD_LIBRARY_PATH=/opt/nidas-dev/lib
+WorkingDirectory=/home/daq/hotfilm
 # The -l makes sure we get environment settings required to parse the XML.
-ExecStart=$NIDAS/bin/hotfilm --xml $HOME/hotfilm/hotfilm.xml
+ExecStart=/bin/bash -l -c "exec $NIDAS/bin/hotfilm --xml hotfilm.xml"
 
-TimeoutStartSec=5
-TimeoutStopSec=10
 Restart=always
 RestartSec=30
 
