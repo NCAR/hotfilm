@@ -474,11 +474,12 @@ setProcessPriority()
 {
     // We could use something like nidas Thread::setRealTimeFIFOPriority(),
     // except that only works on Thread instances.  So do the equivalent
-    // directly with pthread calls.  We could also use nice() and
-    // setpriority(), but I think this is the only way to change the
-    // scheduling policy to FIFO.  Change the scheduling before changing the
-    // user, in case this is relying on starting up as root to have
-    // permissions to set real-time priority.
+    // directly with pthread calls to the current thread.  We could also use
+    // nice() and setpriority(), but I think this is the only way to change
+    // the scheduling policy to FIFO.  Change the scheduling before changing
+    // the user, in case this is relying on starting up as root to have
+    // permissions to set real-time priority.  This does not need to worry
+    // about inheriting capabilities to other threads or subprocesses.
     sched_param priority{50};
     int policy = SCHED_FIFO;
     int result = pthread_setschedparam(pthread_self(), policy, &priority);
@@ -495,6 +496,7 @@ setProcessPriority()
     }
     else{
         ILOG(("") << "thread policy=" << policy
+                  << " (FIFO=" << SCHED_FIFO << ")"
                   << ", priority=" << priority.sched_priority);
     }
 }

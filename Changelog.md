@@ -1,12 +1,11 @@
 # Changelog
 
-## [Unreleased]
 
-- /
+## [0.0.1] - Pending initial release
 
-## [0.0.1] - 2023-06-29
-
-- initial release
+  There are scons targets which install the hotfilm executable into the NIDAS
+  bin directory and also set capability flags on the file to allow realtime
+  scheduling priority without running as root.
 
   Most of the LabJack stream configuration registers can be modified through
   command-line arguments, including rate, resolution index, number of

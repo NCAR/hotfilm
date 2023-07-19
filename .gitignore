@@ -5,3 +5,4 @@ test_t7
 .sconf_temp
 hotfilm*.dat
 hotfilm
+hotfilm.o
