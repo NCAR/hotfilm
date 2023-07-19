@@ -12,15 +12,39 @@ Links:
 
 ## Running
 
+### Scheduling Priority
+
 The `hotfilm` program tries to set a realtime FIFO scheduling policy with
-priority 50.  It can be started as root so it has permissions to set the
-scheduling parameters, and then it can switch to a different user:
+priority 50.  It must be given permission for this either by starting as root
+or by having the appropriate capabilities on the installed file.
+
+If the file capabilities have been set, then `hotfilm` can be started as a
+non-root user but will still be able to set realtime schedule priority:
 
 ```plain
-daq@dsm214:~/hotfilm $ sudo -s  ./hotfilm -u daq --log info --xml hotfilm.xml 
+$ getcap /opt/local/nidas-buster/bin/hotfilm 
+/opt/local/nidas-buster/bin/hotfilm cap_net_admin,cap_sys_nice=ep
+$ /opt/local/nidas-buster/bin/hotfilm --xml hotfilm.xml 
+2023-07-19,00:32:30|INFO|nchannels=4, resolution=4, scanrate=2000, scans_per_read=1000, pps=on, settling=0, range=10
+2023-07-19,00:32:30|INFO|thread policy=1 (FIFO=1), priority=50
+...
+```
+
+Note the executable file has the `cap_net_admin` capability, but technically
+only `cap_sys_nice` is necessary to set realtime priority.  The extra
+capability prevents some confusing error messages when the NIDAS library tries
+to add effective capabilities with `cap_set_proc()`, even though the effective
+capabilities are already set on the file.  See [Install.md](Install.md).
+
+The other option is to start `hotfilm` as root so it has permissions to set
+the scheduling parameters, and then switch to a different user with the `-u`
+argument.  The `-E` argument to `sudo` preserves the environment so project
+environment variables like `DATAMNT` can be expanded in the XML file:
+
+```plain
+daq@dsm214:~/hotfilm $ sudo -E -s  hotfilm -u daq --xml hotfilm.xml 
 [sudo] password for daq: 
 2023-06-29,21:32:57|INFO|thread policy=1, priority=50
-2023-06-29,21:32:57|NOTICE|parsing: hotfilm.xml
 ...
 ```
 

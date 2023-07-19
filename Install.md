@@ -26,7 +26,6 @@ Extract the archive and follow the instructions to install.
 These commands can be used to install NIDAS build dependencies, to build the `hotfilm` program against
 NIDAS on the DSM:
 
-
 ```plain
 apt-get update
 apt-get install -y nidas nidas-libs nidas-dev
@@ -37,6 +36,8 @@ apt-get install -y --no-install-recommends gnupg wget cmake apt-utils \
     libjsoncpp-dev lsb-release xsltproc docbook-xsl libxml2-dev libi2c-dev valgrind net-tools less
 apt install xmlrpc++-dev
 pip3 install scons
+mkdir -p ~/.scons/site_scons
+(cd ~/.scons/site_scons && git clone https://github.com/NCAR/eol_scons)
 ```
 
 At the moment, it's likely that the DSM running `hotfilm` needs to be newer
@@ -53,6 +54,36 @@ Build the `hotfilm` program with `scons`:
 daq@dsm214:~/hotfilm $ scons -Q NIDAS_PATH=/opt/nidas-dev
 g++ -o hotfilm.o -c -std=c++11 -Wno-deprecated -fpic -fPIC -rdynamic -g -Wall -O2 -I. -I/opt/nidas-dev/include -I/usr/include/xmlrpcpp hotfilm.cc
 g++ -o hotfilm -fpic -fPIC -rdynamic -Wl,-rpath=/opt/nidas-dev/lib hotfilm.o -L/opt/nidas-dev/lib -lnidas -lnidas_dynld -lnidas_util -lxerces-c -lxmlrpcpp -lLabJackM
+```
+
+## Installing hotfilm
+
+The `hotfilm` program can be installed into the `bin` directory under `NIDAS_PATH`
+using `scons install`:
+
+```plain
+$ scons -Q install
+Install file: "hotfilm" as "/opt/local/nidas-buster/bin/hotfilm"
+```
+
+There is a separate scons target which can set the capabilities on the
+installed program which allow it to change the scheduling policy:
+
+```plain
+$ sudo scons -Q setcap
+/usr/sbin/setcap cap_net_admin,cap_sys_nice=pe /opt/local/nidas-buster/bin/hotfilm
+```
+
+If the program has to be installed into a directory owned by root, then both
+the install and the setcap can be done with the `install.root` target:
+
+```plain
+$ scons -Q
+g++ -o hotfilm.o -c -std=c++11 -Wno-deprecated -fpic -fPIC -rdynamic -g -Wall -O2 -I. -I/opt/local/nidas-buster/include -I/usr/include/xmlrpcpp hotfilm.cc
+g++ -o hotfilm -fpic -fPIC -rdynamic -Wl,-rpath=/opt/local/nidas-buster/lib64 hotfilm.o -L/opt/local/nidas-buster/lib64 -lnidas -lnidas_dynld -lnidas_util -lxerces-c -lxmlrpcpp -lLabJackM
+$ sudo scons -Q install.root
+Install file: "hotfilm" as "/opt/local/nidas-buster/bin/hotfilm"
+/usr/sbin/setcap cap_net_admin,cap_sys_nice=pe /opt/local/nidas-buster/bin/hotfilm
 ```
 
 ## Configure the LabJack for the network
