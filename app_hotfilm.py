@@ -1,12 +1,10 @@
-import time
 import sys
 from functools import partial
 from threading import Thread
-from random import random
 from bokeh.models import ColumnDataSource
 from bokeh.plotting import curdoc, figure
 from bokeh.layouts import layout
-from bokeh.models import Div, Spinner, Dropdown, Range1d
+from bokeh.models import Spinner
 
 import numpy as np
 
@@ -19,60 +17,62 @@ def sinewave(x, amp=1.0, freq=1.0, phase=0.0, offset=0.0):
 
 
 # only modify from a Bokeh session callback
-source = ColumnDataSource(data=dict(x=[0], y=[0]))
+timesource = ColumnDataSource(data=dict(x=[0], y=[0]))
+specsource = ColumnDataSource(data=dict(x=[0], y=[0]))
 
 # This is important! Save curdoc() to make sure all threads
 # see the same document.
 doc = curdoc()
 
 
+class HotFilmPlot:
+
+    def __init__(self, doc):
+        self.spectrum = False
+        self.hf = dhf.ReadHotfilm()
+        self.doc = doc
+
+    def read_hotfilm(self):
+        self.hf.start()
+        while True:
+            data = self.hf.get_data()
+            if data is None:
+                break
+            x = data['x']
+            y = data['y']
+            # but update the document from a callback
+            self.doc.add_next_tick_callback(partial(update, x=x, y=y))
+
+            sy = np.abs(np.fft.rfft(y - np.mean(y)))
+            # x = np.arange(0, 1, 1.0/len(y))
+            sx = np.fft.rfftfreq(len(y), 1.0/len(y))
+            self.doc.add_next_tick_callback(partial(update_spectra, x=sx, y=sy))
+
+    def update_channel(self, attrname, old, new):
+        self.hf.select_channel(new)
+
+
+hfp = HotFilmPlot(doc)
+if len(sys.argv) > 1:
+    hfp.hf.set_source(sys.argv[1])
+
+
 async def update(x, y):
     # source.stream(dict(x=x, y=y))
-    source.data = dict(x=x, y=y)
-    plot.update(x_range=Range1d(x[0], x[-1]))
+    timesource.data = dict(x=x, y=y)
 
 
-def blocking_task():
-    while True:
-        # do some blocking computation
-        time.sleep(1)
-        x = np.arange(0, 1, 1.0/2000)
-        freq = (50 + random()*100)
-        y = sinewave(x, 1, freq, 0, 2)
-        print(x)
-        print(y)
-
-        # but update the document from a callback
-        doc.add_next_tick_callback(partial(update, x=x, y=y))
+async def update_spectra(x, y):
+    # source.stream(dict(x=x, y=y))
+    specsource.data = dict(x=x, y=y)
 
 
-hf = dhf.ReadHotfilm()
-if len(sys.argv) > 1:
-    hf.set_source(sys.argv[1])
-
-
-def read_hotfilm():
-    hf.start()
-    while True:
-        data = hf.get_data()
-        if data is None:
-            break
-        # but update the document from a callback
-        doc.add_next_tick_callback(partial(update, x=data['x'], y=data['y']))
-
-
-plot = figure(height=600, width=1000, title="Hotfilm A/D Channels",
-              x_range=[0, 1], y_range=[-1, 10])
-plot.line(x='x', y='y', source=source, line_width=2)
-
-
-div = Div(
-    text="""
-        <p>Select channel 0-3:</p>
-        """,
-    width=200,
-    height=30,
-)
+tplot = figure(height=400, width=1000, title="Hotfilm Channel Voltage",
+               x_axis_type="datetime", y_range=[1, 5])
+splot = figure(height=400, width=1000, title="Hotfilm Channel Spectrum",
+               x_axis_label="Frequency (Hz)", y_range=[-0.5, 20])
+tplot.line(x='x', y='y', source=timesource, line_width=2)
+splot.line(x='x', y='y', source=specsource, line_width=2)
 
 spinner = Spinner(
     title="Channel",  # a string to display above the widget
@@ -83,36 +83,15 @@ spinner = Spinner(
     width=200,  # the width of the widget in pixels
     )
 
-
-dropdown = Dropdown(label="Time",
-                    menu=[("Time", "time"),
-                          ("Frequency", "frequency")])
-
-
-def update_channel(attrname, old, new):
-    hf.select_channel(new)
-
-
-def select_domain(domain):
-    if domain == "time":
-        hf.spectrum = False
-        dropdown.update(label="Time")
-    else:
-        hf.spectrum = True
-        dropdown.update(label="Frequency")
-
-
-spinner.on_change('value', update_channel)
-dropdown.on_click(lambda event: select_domain(event.item))
-
+spinner.on_change('value', hfp.update_channel)
 
 layout = layout([
-    [div, spinner, dropdown],
-    [plot],
+    [spinner],
+    [tplot],
+    [splot]
 ])
 
 doc.add_root(layout)
 
-# thread = Thread(target=blocking_task)
-thread = Thread(target=read_hotfilm)
+thread = Thread(target=hfp.read_hotfilm)
 thread.start()
