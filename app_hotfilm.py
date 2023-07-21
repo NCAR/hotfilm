@@ -5,10 +5,16 @@ from bokeh.models import ColumnDataSource
 from bokeh.plotting import curdoc, figure
 from bokeh.layouts import layout
 from bokeh.models import Spinner
+import logging
 
 import numpy as np
 
 import dump_hotfilm as dhf
+
+
+logger = logging.getLogger(__name__)
+
+logging.basicConfig(level=logging.DEBUG)
 
 
 def sinewave(x, amp=1.0, freq=1.0, phase=0.0, offset=0.0):
@@ -31,15 +37,19 @@ class HotFilmPlot:
         self.spectrum = False
         self.hf = dhf.ReadHotfilm()
         self.doc = doc
+        self.hf.select_channels([0])
 
     def read_hotfilm(self):
         self.hf.start()
         while True:
             data = self.hf.get_data()
+            if data.columns[0] not in self.hf.channels:
+                continue
             if data is None:
                 break
-            x = data['x']
-            y = data['y']
+            x = data.index
+            channel = data.columns[0]
+            y = data[channel]
             # but update the document from a callback
             self.doc.add_next_tick_callback(partial(update, x=x, y=y))
 
@@ -49,7 +59,7 @@ class HotFilmPlot:
             self.doc.add_next_tick_callback(partial(update_spectra, x=sx, y=sy))
 
     def update_channel(self, attrname, old, new):
-        self.hf.select_channel(new)
+        self.hf.select_channels([new])
 
 
 hfp = HotFilmPlot(doc)
