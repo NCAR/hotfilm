@@ -49,6 +49,7 @@ class ReadHotfilm:
     """
     Read the hotfilm 1-second time series from data_dump.
     """
+    ISO = "iso"
 
     def __init__(self):
         self.source = "sock:192.168.1.205"
@@ -60,9 +61,20 @@ class ReadHotfilm:
         self.delay = 0
         # dataframe for the current scan as it accumulates channels
         self.scan = None
+        # accumulate scans into contiguous data frames
+        self.frame = None
         # limit output to inside the begin and end times, if set
         self.begin = None
         self.end = None
+        self.timeformat = self.ISO
+
+    def set_time_format(self, fspec):
+        self.timeformat = fspec
+
+    def format_time(self, when: dt.datetime):
+        if self.timeformat == self.ISO:
+            return when.isoformat()
+        return when.strftime(self.timeformat)
 
     def set_source(self, source):
         logger.info("setting source: %s", source)
@@ -112,6 +124,15 @@ class ReadHotfilm:
         selected = not self.begin or when >= self.begin
         selected = selected and (not self.end or when <= self.end)
         return selected
+
+    def accumulate_scan(self, scan):
+        """
+        Add this scan to the current frame if it looks to be contiguous.
+        """
+        if self.frame is None:
+            self.frame = scan
+        else:
+            self.frame = pd.concat(self.frame, scan)
 
     def get_scan(self):
         """
@@ -174,7 +195,7 @@ class ReadHotfilm:
         out.write("\n")
         while data is not None:
             for i in range(0, len(data)):
-                out.write("%s" % (data.index[i].isoformat()))
+                out.write("%s" % (self.format_time(data.index[i])))
                 for c in data.columns:
                     out.write(" %s" % (data[c][i]))
                 out.write("\n")
@@ -195,6 +216,8 @@ def main(argv: list[str] or None):
                         help="Output scans after begin, in ISO UTC format.")
     parser.add_argument("--end",
                         help="Output scans up until end, in ISO UTC format.")
+    parser.add_argument("--timeformat",
+                        help="Timestamp format, iso or %% spec pattern")
     parser.add_argument("--log", choices=['debug', 'info', 'error'],
                         default='info')
     args = parser.parse_args(argv)
@@ -210,6 +233,7 @@ def main(argv: list[str] or None):
         hf.begin = dt.datetime.fromisoformat(args.begin)
     if args.end:
         hf.end = dt.datetime.fromisoformat(args.end)
+    hf.set_time_format(args.timeformat)
     hf.start()
     hf.delay = 0
     if not ncpath:
@@ -254,3 +278,11 @@ def test_scan_skip():
     data = hf.parse_line(_scanfill)
     assert data is not None
     assert hf.skip_scan(data)
+
+
+def test_time_format():
+    hf = ReadHotfilm()
+    when = dt.datetime(2023, 7, 23, 2, 3, 4, 765430, dt.timezone.utc)
+    assert hf.format_time(when) == "2023-07-23T02:03:04.765430+00:00"
+    hf.set_time_format("%H:%M:%S.%f")
+    assert hf.format_time(when) == "02:03:04.765430"
