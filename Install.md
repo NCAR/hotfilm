@@ -81,7 +81,7 @@ the install and the setcap can be done with the `install.root` target:
 $ scons -Q
 g++ -o hotfilm.o -c -std=c++11 -Wno-deprecated -fpic -fPIC -rdynamic -g -Wall -O2 -I. -I/opt/local/nidas-buster/include -I/usr/include/xmlrpcpp hotfilm.cc
 g++ -o hotfilm -fpic -fPIC -rdynamic -Wl,-rpath=/opt/local/nidas-buster/lib64 hotfilm.o -L/opt/local/nidas-buster/lib64 -lnidas -lnidas_dynld -lnidas_util -lxerces-c -lxmlrpcpp -lLabJackM
-$ sudo scons -Q install.root
+$ sudo scons -Q --site-dir=/home/daq/.scons/site_scons install.root
 Install file: "hotfilm" as "/opt/local/nidas-buster/bin/hotfilm"
 /usr/sbin/setcap cap_net_admin,cap_sys_nice=pe /opt/local/nidas-buster/bin/hotfilm
 ```
