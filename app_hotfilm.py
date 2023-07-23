@@ -53,7 +53,7 @@ class HotFilmPlot:
             # but update the document from a callback
             self.doc.add_next_tick_callback(partial(update, x=x, y=y))
 
-            sy = np.abs(np.fft.rfft(y - np.mean(y)))
+            sy = np.abs(np.fft.rfft(y))**2
             # x = np.arange(0, 1, 1.0/len(y))
             sx = np.fft.rfftfreq(len(y), 1.0/len(y))
             self.doc.add_next_tick_callback(partial(update_spectra, x=sx, y=sy))
@@ -80,7 +80,9 @@ async def update_spectra(x, y):
 tplot = figure(height=400, width=1000, title="Hotfilm Channel Voltage",
                x_axis_type="datetime", y_range=[1, 5])
 splot = figure(height=400, width=1000, title="Hotfilm Channel Spectrum",
-               x_axis_label="Frequency (Hz)", y_range=[-0.5, 20])
+               x_axis_label="Frequency (Hz)",
+               x_axis_type="log", y_axis_type="log",
+               y_range=[10**-5, 10**5])
 tplot.line(x='x', y='y', source=timesource, line_width=2)
 splot.line(x='x', y='y', source=specsource, line_width=2)
 
