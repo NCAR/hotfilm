@@ -67,9 +67,23 @@ class ReadHotfilm:
         self.begin = None
         self.end = None
         self.timeformat = self.ISO
+        # minimum number of seconds required to consider a block good
+        self.minblock = 30*60
+        # maximum number of seconds to include in a block
+        self.maxblock = 4*60*60
+        # adjustment to the times to get them line up when they get off by one
+        # sample
+        self.adjust_time = 0
 
     def set_time_format(self, fspec):
-        self.timeformat = fspec
+        """
+        Set the time format specifier to @p fspec.  Passing None sets it to
+        the default.
+        """
+        if not fspec:
+            self.timeformat = self.ISO
+        else:
+            self.timeformat = fspec
 
     def format_time(self, when: dt.datetime):
         if self.timeformat == self.ISO:
@@ -77,15 +91,12 @@ class ReadHotfilm:
         return when.strftime(self.timeformat)
 
     def set_source(self, source):
-        logger.info("setting source: %s", source)
+        logger.info("setting sources: %s", ",".join(source))
         self.source = source
 
     def _make_cmd(self):
-        self.cmd = ["data_dump", "--nodeltat", "-i", "-1,520-523",
-                    self.source]
-        self.delay = 0
-        if Path(self.source).exists():
-            self.delay = 1
+        self.cmd = ["data_dump", "--nodeltat", "-i", "-1,520-523"]
+        self.cmd += self.source
 
     def start(self):
         self._make_cmd()
@@ -97,7 +108,7 @@ class ReadHotfilm:
 
     def get_data(self):
         """
-        Return the next single channel of data as a DataFrame.
+        Return the next selected channel as a DataFrame.
         """
         data = None
         while data is None:
@@ -105,10 +116,19 @@ class ReadHotfilm:
             if not line:
                 break
             match = _prefix_rx.match(line)
-            data = self.match_to_data(match)
-            if (data is not None and (self.channels and
-                                      data.columns[0] not in self.channels)):
+            data = self.match_to_data(match, line)
+            if data is None:
+                continue
+            # If not yet into the selected range, skip it.
+            when = data.index[0]
+            if self.begin and when < self.begin:
                 data = None
+            elif self.end and when > self.end:
+                data = None
+                break
+            elif (self.channels and data.columns[0] not in self.channels):
+                data = None
+
         if data is not None and self.delay:
             time.sleep(self.delay)
         return data
@@ -125,16 +145,7 @@ class ReadHotfilm:
         selected = selected and (not self.end or when <= self.end)
         return selected
 
-    def accumulate_scan(self, scan):
-        """
-        Add this scan to the current frame if it looks to be contiguous.
-        """
-        if self.frame is None:
-            self.frame = scan
-        else:
-            self.frame = pd.concat(self.frame, scan)
-
-    def get_scan(self):
+    def get_scan(self) -> pd.DataFrame:
         """
         Return a DataFrame with all the channels in a single scan.
         """
@@ -156,30 +167,102 @@ class ReadHotfilm:
                 logger.debug("adding %s to current scan at %s", name, when)
                 self.scan[name] = data[name]
             if scan is None:
+                # no full scan to return yet
                 continue
             # If there are any dummy values at all, then skip the entire
             # frame.  If the labjack could not keep up and fill the entire
             # scan, then the pps count also contained dummy values, in which
-            # case the computed timestamp is likely wrong.
-            if not self.time_selected(scan):
-                scan = None
-            elif self.skip_scan(scan):
+            # case the computed timestamp is likely wrong too.
+            if self.skip_scan(scan):
                 logger.error("skipping scan with dummy values at %s",
                              when.isoformat())
                 scan = None
         return scan
 
+    def is_contiguous(self, frame: pd.DataFrame, scan: pd.DataFrame):
+        """
+        Return true if @p scan follows right at the end of @p frame.
+        """
+        last = frame.index[-1]
+        next = scan.index[0]
+        gap = (next - last) / dt.timedelta(microseconds=1)
+        gap += self.adjust_time
+        adjust = 0
+        # if it skips a sample or two, adjust to line them back up.
+        if 1400 < gap < 1600:
+            adjust -= 1000
+        elif 900 < gap < 1100:
+            adjust -= 500
+        elif gap < 250:
+            adjust += 500
+        if adjust:
+            gap += adjust
+            self.adjust_time += adjust
+            logger.info("for scan starting at %s, "
+                        "time adjustment is now %d us",
+                        scan.index[0].isoformat(), self.adjust_time)
+
+        # if there is still too large a gap, then do not adjust the
+        # times in the next scan, and instead reset the adjustment
+        cont = (gap < 550)
+        if not cont:
+            logger.error("gap detected: %d us from %s to %s",
+                         gap, last.isoformat(), next.isoformat())
+            self.adjust_time = 0
+        elif self.adjust_time:
+            scan.index += dt.timedelta(microseconds=self.adjust_time)
+
+        return cont
+
+    def get_block(self):
+        """
+        Accumulate scans until there is a break, then return them.
+        """
+        frame = None
+        while True:
+            scan = self.get_scan()
+            if scan is None:
+                frame = self.frame
+                self.frame = None
+            else:
+                if self.frame is None:
+                    logger.info("starting scan block: %s",
+                                scan.index[0].isoformat())
+                    self.frame = scan
+                elif scan.index[0] - self.frame.index[0] > dt.timedelta(seconds=self.maxblock):
+                    logger.info("max block size reached at %s", self.frame.index[-1].isoformat())
+                    frame = self.frame
+                    self.frame = scan
+                elif self.is_contiguous(self.frame, scan):
+                    self.frame = pd.concat([self.frame, scan])
+                else:
+                    frame = self.frame
+                    self.frame = scan
+            if frame is not None:
+                first = frame.index[0]
+                last = frame.index[-1]
+                if first + dt.timedelta(seconds=self.minblock) > last:
+                    logger.error("block of scans is too short, from %s to %s ",
+                                 first.isoformat(), last.isoformat())
+                    frame = None
+            if scan is None or frame is not None:
+                break
+        return frame
+
     def parse_line(self, line):
         match = _prefix_rx.match(line)
         return self.match_to_data(match)
 
-    def match_to_data(self, match):
+    def match_to_data(self, match, line=None):
         if not match:
             return None
         when = datetime_from_match(match)
         y = np.fromstring(match.group('data'), dtype=float, sep=' ')
         step = dt.timedelta(microseconds=1e6/len(y))
         x = [when + (i * step) for i in range(0, len(y))]
+        if False and line:
+            logger.debug("from line: %s...; x[0]=%s, x[%d]=%s", line[:30],
+                         x[0].isoformat(), len(x)-1, x[-1].isoformat())
         channel = int(match.group('spsid')) - 520
         name = f"ch{channel}"
         data = pd.DataFrame({name: y}, index=x)
@@ -201,21 +284,55 @@ class ReadHotfilm:
                 out.write("\n")
             data = self.get_scan()
 
+    def write_text_file(self, filespec: str):
+        while True:
+            data = self.get_block()
+            if data is None:
+                break
+            when = data.index[0]
+            path = when.strftime(filespec)
+            logger.info("writing %d seconds to file %s",
+                        len(data)/2000, path)
+            out = open(path, "w")
+            out.write("time")
+            for c in data.columns:
+                out.write(" %s" % (c))
+            out.write("\n")
+
+            for i in range(0, len(data)):
+                out.write("%s" % (self.format_time(data.index[i])))
+                for c in data.columns:
+                    out.write(" %s" % (data[c][i]))
+                out.write("\n")
+            out.close()
+
 
 def main(argv: list[str] or None):
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("source", nargs="?", default=None)
+    parser.add_argument("source", nargs="+",
+                        help="1 or more data files, or a sample "
+                        "server specifier, like sock:t0t:31000.",
+                        default=None)
     parser.add_argument("--netcdf", help="Write data to named netcdf file")
     parser.add_argument("--text", help="Write data in text columns to file.  "
                         "Filenames can include time specifiers, "
-                        "like %Y%m%d_%H%M%S.")
+                        "like %%Y%%m%%d_%%H%%M%%S.")
     parser.add_argument("--channel", action="append", dest="channels",
                         help="Channels from 0-3, or all by default")
     parser.add_argument("--begin",
                         help="Output scans after begin, in ISO UTC format.")
     parser.add_argument("--end",
                         help="Output scans up until end, in ISO UTC format.")
+    parser.add_argument("--delay",
+                        help="Wait DELAY seconds between returning scans.  "
+                        "Useful for simulating real-time data when called "
+                        "from the web plotting app with data files.",
+                        default=0)
+    parser.add_argument("--min", type=int, default=30*60,
+                        help="Minimum seconds to write into a file.")
+    parser.add_argument("--max", type=int, default=60*60,
+                        help="Max seconds to write into a file.")
     parser.add_argument("--timeformat",
                         help="Timestamp format, iso or %% spec pattern")
     parser.add_argument("--log", choices=['debug', 'info', 'error'],
@@ -229,14 +346,19 @@ def main(argv: list[str] or None):
     hf = ReadHotfilm()
     hf.set_source(source)
     hf.select_channels(args.channels)
+    hf.minblock = args.min
+    hf.maxblock = args.max
     if args.begin:
         hf.begin = dt.datetime.fromisoformat(args.begin)
     if args.end:
         hf.end = dt.datetime.fromisoformat(args.end)
+
     hf.set_time_format(args.timeformat)
+    hf.delay = args.delay
     hf.start()
-    hf.delay = 0
-    if not ncpath:
+    if textpath:
+        hf.write_text_file(textpath)
+    else:
         hf.write_text(sys.stdout)
 
 
