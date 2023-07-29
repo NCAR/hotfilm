@@ -52,7 +52,7 @@ class ReadHotfilm:
     ISO = "iso"
 
     def __init__(self):
-        self.source = "sock:192.168.1.205"
+        self.source = ["sock:192.168.1.220:31000"]
         self.cmd = None
         self.dd = None
         # default to all channels, otherwise a list of channel names
@@ -100,11 +100,15 @@ class ReadHotfilm:
 
     def start(self):
         self._make_cmd()
+        command = " ".join(self.cmd)
+        logger.info("running: %s%s", command[:60],
+                    "..." if command[60:] else "")
         self.dd = sp.Popen(self.cmd, stdout=sp.PIPE, text=True)
 
-    def select_channels(self, channels: list[int]):
+    def select_channels(self, channels: list[int] or None):
         self.channels = [f"ch{ch}" for ch in channels] if channels else None
-        logger.debug("selected channels %s", ",".join(self.channels))
+        logger.debug("selected channels: %s",
+                     ",".join(self.channels) if self.channels else "all")
 
     def get_data(self):
         """
@@ -319,6 +323,7 @@ def main(argv: list[str] or None):
                         "Filenames can include time specifiers, "
                         "like %%Y%%m%%d_%%H%%M%%S.")
     parser.add_argument("--channel", action="append", dest="channels",
+                        default=None,
                         help="Channels from 0-3, or all by default")
     parser.add_argument("--begin",
                         help="Output scans after begin, in ISO UTC format.")

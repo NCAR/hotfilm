@@ -43,8 +43,6 @@ class HotFilmPlot:
         self.hf.start()
         while True:
             data = self.hf.get_data()
-            if data.columns[0] not in self.hf.channels:
-                continue
             if data is None:
                 break
             x = data.index
@@ -64,7 +62,7 @@ class HotFilmPlot:
 
 hfp = HotFilmPlot(doc)
 if len(sys.argv) > 1:
-    hfp.hf.set_source(sys.argv[1])
+    hfp.hf.set_source(sys.argv[1:2])
 
 
 async def update(x, y):
@@ -78,11 +76,11 @@ async def update_spectra(x, y):
 
 
 tplot = figure(height=400, width=1000, title="Hotfilm Channel Voltage",
-               x_axis_type="datetime", y_range=[1, 5])
+               x_axis_type="datetime", y_range=[-1, 10])
 splot = figure(height=400, width=1000, title="Hotfilm Channel Spectrum",
                x_axis_label="Frequency (Hz)",
                x_axis_type="log", y_axis_type="log",
-               y_range=[10**-5, 10**5])
+               y_range=[10**-6, 10**7])
 tplot.line(x='x', y='y', source=timesource, line_width=2)
 splot.line(x='x', y='y', source=specsource, line_width=2)
 
