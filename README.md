@@ -12,11 +12,54 @@ Links:
 
 ## Running
 
-### Scheduling Priority
+### Systemd service
+
+For the M2HATS project, the service unit has already been installed for the
+daq user on `ustar` and `t0t`.  See [Install](Install.md) for details.
+
+### Starting and stopping with systemctl
+
+```plain
+systemctl --user start hotfilm
+systemctl --user stop hotfilm
+```
+
+### Showing run status
+
+Below are commands to check the run status through `systemd`.  See
+[Diagnostics](#diagnostics) section for ways to monitor the actual data.
+
+```plain
+(base) [daq@ustar hotfilm]$ systemctl --user status hotfilm.service 
+- hotfilm.service - Hotfilm Data Acquisition
+     Loaded: loaded (/home/daq/.config/systemd/user/hotfilm.service; linked; preset: disabled)
+     Active: active (running) since Sun 2023-07-30 15:34:46 MDT; 1h 34min ago
+   Main PID: 1084344 (hotfilm)
+      Tasks: 11 (limit: 38243)
+     Memory: 235.1M
+        CPU: 31.620s
+     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/hotfilm.service
+             └─1084344 /opt/nidas-dev/bin/hotfilm --xml hotfilm.xml
+
+Jul 30 15:34:48 ustar.field.eol.ucar.edu bash[1084344]: 2023-07-30,15:34:48|INFO|Stream started. Actual scan rate: 2000.00 Hz (10000.00 sample rate)
+Jul 30 15:34:49 ustar.field.eol.ucar.edu bash[1084344]: 2023-07-30,15:34:49|INFO|creating: raw_data/hotfilm_20230730_213448.dat
+Jul 30 15:38:55 ustar.field.eol.ucar.edu bash[1084344]: 2023-07-30,15:38:55|INFO|inet:192.168.1.10:31000: setNonBlocking(true)
+Jul 30 16:00:01 ustar.field.eol.ucar.edu bash[1084344]: 2023-07-30,16:00:01|INFO|creating: raw_data/hotfilm_20230730_220000.dat
+```
+
+The log can also be shown with `journalctl`:
+
+```plain
+journalctl --user -u hotfilm
+```
+
+### Scheduling priority
 
 The `hotfilm` program tries to set a realtime FIFO scheduling policy with
 priority 50.  It must be given permission for this either by starting as root
-or by having the appropriate capabilities on the installed file.
+or by having the appropriate capabilities on the installed file.  This is more
+important on a DSM and less important, if not completely unnecessary, on
+`ustar`.
 
 If the file capabilities have been set, then `hotfilm` can be started as a
 non-root user but will still be able to set realtime schedule priority:
@@ -63,7 +106,7 @@ Like for a NIDAS `dsm` process, the `hotfilm` process is configured with an
 XML file which can specify multiple sample outputs, usually a file archive and
 a sample server socket.  The default [hotfilm.xml](hotfilm.xml) file includes
 the typical NIDAS output streams, in particular an archive file data stream
-and real-time sample output on port 30000.
+and real-time sample output on port 31000.
 
 Unlike the sensors in a normal `dsm` process, the samples recorded by
 `hotfilm` are not raw character streams which have to be processed to generate
@@ -97,11 +140,23 @@ bokeh app so the web client can plot the updates in real-time.  Run the web
 application like so:
 
 ```plain
-bokeh serve --show app_hotfilm.py --args sock:localhost
+bokeh serve --show app_hotfilm.py --args sock:localhost:31000
 ```
 
-The `--show` argument automatically opens a browser window to the local app
-server instance on the right port.
+The last argument is passed to the `data_dump` command, so use whatever works
+to connect to the running `hotfilm` program.  For example, the above command
+starts the web app on `ustar` when `hotfilm` is running on `ustar`.  The
+`--show` argument automatically opens a browser window to the local app server
+instance on the right port.
+
+For the web app to run on `ustar` but accept connections from browsers on
+other hosts, use this command on `ustar`:
+
+```plain
+bokeh serve --allow-websocket-origin=192.168.1.10:5006 --port 5006 app_hotfilm.py --args sock:localhost:31000
+```
+
+Then browse to url `http://192.168.1.10:5006/`.
 
 The browser app can plot one of the four channels in either the time or
 frequency domain, for each second of data output as a sample.
@@ -165,6 +220,26 @@ Logging can also be helpful.  Turn on debugging log messages with `--log
 debug`.  The `--diag` command-line argument enables extra LJM calls to report
 on the TCP buffer status and check for skipped scans.  However, for normal
 operations, that probably adds more overhead than it's worth.
+
+## Exporting hotfilm data
+
+The script [dump_hotfilm.py](dump_hotfilm.py) can translate NIDAS archive
+files into a column text format using `data_dump`.  Run `dump_hotfilm.py -h`
+to see usage.
+
+This is the command used to export data for M2HATS on `ustar`.  The text files
+have two columns, first column is floating point seconds since the epoch, and
+the second column is channel 1, ie, the hotfilm at the 1m sonic.
+
+```plain
+dump_hotfilm.py --log info --channel 1 --timeformat %s.%f --text text_%Y%m%d_%H%M%S.epoch.txt /data/isfs/projects/M2HATS/raw_data/
+```
+
+The script creates output files of uninterrupted, contiguous scans, by default
+at least 30 minutes and no more than 4 hours.  The min and max limits can be
+adjusted with command-line arguments.
+
+The text files can be compressed afterwards.
 
 ## Todo
 

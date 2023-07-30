@@ -62,7 +62,7 @@ class HotFilmPlot:
 
 hfp = HotFilmPlot(doc)
 if len(sys.argv) > 1:
-    hfp.hf.set_source(sys.argv[1:2])
+    dhf.apply_args(hfp.hf, sys.argv[1:])
 
 
 async def update(x, y):

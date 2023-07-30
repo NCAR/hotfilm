@@ -86,6 +86,17 @@ Install file: "hotfilm" as "/opt/local/nidas-buster/bin/hotfilm"
 /usr/sbin/setcap cap_net_admin,cap_sys_nice=pe /opt/local/nidas-buster/bin/hotfilm
 ```
 
+## Installing systemd service unit
+
+There is a systemd service file [hotfilm.service](hotfilm.service).  This file
+can be linked into the user systemd directory, customized as needed, then used
+to start and stop the `hotfilm` program:
+
+```plain
+systemctl --user link ./hotfilm.service
+systemctl --user daemon-reload
+```
+
 ## Configure the LabJack for the network
 
 According to the LabJack T-series documentation, the throughput is a little
@@ -143,7 +154,6 @@ There is a helpful [quick start
 tutorial](https://labjack.com/pages/support?doc=/quickstart/t7-quickstart-tutorial-platinum/),
 and the Kipling interface provides a nice pinout diagram and a way to test
 different register settings.
-
 
 ## LabJack T7 Python
 

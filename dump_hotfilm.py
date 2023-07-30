@@ -1,7 +1,7 @@
+#! /bin/env python
 
 import sys
 import subprocess as sp
-from pathlib import Path
 import argparse
 import time
 import logging
@@ -311,17 +311,12 @@ class ReadHotfilm:
             out.close()
 
 
-def main(argv: list[str] or None):
-
+def apply_args(hf: ReadHotfilm, argv: list[str] or None):
     parser = argparse.ArgumentParser()
     parser.add_argument("source", nargs="+",
                         help="1 or more data files, or a sample "
                         "server specifier, like sock:t0t:31000.",
                         default=None)
-    parser.add_argument("--netcdf", help="Write data to named netcdf file")
-    parser.add_argument("--text", help="Write data in text columns to file.  "
-                        "Filenames can include time specifiers, "
-                        "like %%Y%%m%%d_%%H%%M%%S.")
     parser.add_argument("--channel", action="append", dest="channels",
                         default=None,
                         help="Channels from 0-3, or all by default")
@@ -329,7 +324,7 @@ def main(argv: list[str] or None):
                         help="Output scans after begin, in ISO UTC format.")
     parser.add_argument("--end",
                         help="Output scans up until end, in ISO UTC format.")
-    parser.add_argument("--delay",
+    parser.add_argument("--delay", type=float,
                         help="Wait DELAY seconds between returning scans.  "
                         "Useful for simulating real-time data when called "
                         "from the web plotting app with data files.",
@@ -338,19 +333,21 @@ def main(argv: list[str] or None):
                         help="Minimum seconds to write into a file.")
     parser.add_argument("--max", type=int, default=60*60,
                         help="Max seconds to write into a file.")
+    parser.add_argument("--netcdf", help="Write data to named netcdf file")
+    parser.add_argument("--text", help="Write data in text columns to file.  "
+                        "Filenames can include time specifiers, "
+                        "like %%Y%%m%%d_%%H%%M%%S.")
     parser.add_argument("--timeformat",
-                        help="Timestamp format, iso or %% spec pattern")
+                        help="Timestamp format, iso or %% spec pattern.  "
+                        "Use %s.%f to get floating point seconds since epoch.")
     parser.add_argument("--log", choices=['debug', 'info', 'error'],
                         default='info')
     args = parser.parse_args(argv)
-    source = args.source
-    ncpath = args.netcdf
-    textpath = args.text
 
     logging.basicConfig(level=logging.getLevelName(args.log.upper()))
-    hf = ReadHotfilm()
-    hf.set_source(source)
-    hf.select_channels(args.channels)
+    hf.set_source(args.source)
+    if args.channels:
+        hf.select_channels(args.channels)
     hf.minblock = args.min
     hf.maxblock = args.max
     if args.begin:
@@ -360,9 +357,17 @@ def main(argv: list[str] or None):
 
     hf.set_time_format(args.timeformat)
     hf.delay = args.delay
+    return args
+
+
+def main(argv: list[str] or None):
+    hf = ReadHotfilm()
+    args = apply_args(hf, argv)
     hf.start()
-    if textpath:
-        hf.write_text_file(textpath)
+    if args.text:
+        hf.write_text_file(args.text)
+    elif args.netcdf:
+        pass
     else:
         hf.write_text(sys.stdout)
 
