@@ -93,7 +93,7 @@
                 <fileset dir="$DATAMNT/projects/${PROJECT}/raw_data"
                         file="${DSM}_%Y%m%d_%H%M%S.dat"
                         length="3600">
-                <mount dir="$DATAMNT"/>
+                <!-- <mount dir="$DATAMNT"/> -->
                 </fileset>
             </output>
 
