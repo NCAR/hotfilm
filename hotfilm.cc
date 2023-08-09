@@ -164,7 +164,7 @@ read_name(int handle, const std::string& name, double* value)
         msg << "eReadName(" << handle << ", " << name << ")";
         check_error(err, msg.str());
     }
-    ILOG(("read: ") << name << "=" << value);
+    ILOG(("read: ") << name << "=" << *value);
 }
 
 
@@ -361,12 +361,13 @@ configure_stream()
 
     // The max of 32768 is 4096 scans of 4 channels, so only 2 seconds.  So
     // may as well set it to the max.
-    set_name(handle, "STREAM_BUFFER_SIZE_BYTES", 32768);
+    const double STREAM_BUFFER_SIZE = 32768;
+    set_name(handle, "STREAM_BUFFER_SIZE_BYTES", STREAM_BUFFER_SIZE);
     read_name(handle, "STREAM_BUFFER_SIZE_BYTES", &deviceBufferBytes);
-    if (deviceBufferBytes != 32768)
+    if (deviceBufferBytes != STREAM_BUFFER_SIZE)
     {
-        PLOG(("expected stream buffer to be 32768 bytes, but got ")
-             << deviceBufferBytes);
+        PLOG(("expected stream buffer to be ") << STREAM_BUFFER_SIZE
+             << " bytes, but got " << deviceBufferBytes);
     }
 
     // Configure the analog inputs' negative channel, range, settling time and
