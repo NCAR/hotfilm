@@ -362,6 +362,12 @@ configure_stream()
     // The max of 32768 is 4096 scans of 4 channels, so only 2 seconds.  So
     // may as well set it to the max.
     set_name(handle, "STREAM_BUFFER_SIZE_BYTES", 32768);
+    read_name(handle, "STREAM_BUFFER_SIZE_BYTES", &deviceBufferBytes);
+    if (deviceBufferBytes != 32768)
+    {
+        PLOG(("expected stream buffer to be 32768 bytes, but got ")
+             << deviceBufferBytes);
+    }
 
     // Configure the analog inputs' negative channel, range, settling time and
     // resolution.
