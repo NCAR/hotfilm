@@ -50,6 +50,7 @@ class ReadHotfilm:
     Read the hotfilm 1-second time series from data_dump.
     """
     ISO = "iso"
+    EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
 
     def __init__(self):
         self.source = ["sock:192.168.1.220:31000"]
@@ -86,9 +87,16 @@ class ReadHotfilm:
             self.timeformat = fspec
 
     def format_time(self, when: dt.datetime):
+        # The %s specifier to strftime does the wrong thing if TZ is not UTC.
+        # Rather than modify the environment just for this, interpolate %s
+        # explicitly here.
         if self.timeformat == self.ISO:
             return when.isoformat()
-        return when.strftime(self.timeformat)
+        mformat = self.timeformat
+        if "%s" in mformat:
+            seconds = int((when - self.EPOCH).total_seconds())
+            mformat = self.timeformat.replace("%s", str(seconds))
+        return when.strftime(mformat)
 
     def set_source(self, source):
         logger.info("setting sources: %s", ",".join(source))
@@ -218,6 +226,16 @@ class ReadHotfilm:
 
         return cont
 
+    def get_period(self, frame):
+        """
+        Return the time period covered by this frame, which includes the
+        interval after the last point.
+        """
+        first = frame.index[0]
+        last = frame.index[-1]
+        period = last - first + dt.timedelta(microseconds=500)
+        return period
+
     def get_block(self):
         """
         Accumulate scans until there is a break, then return them.
@@ -233,21 +251,22 @@ class ReadHotfilm:
                     logger.info("starting scan block: %s",
                                 scan.index[0].isoformat())
                     self.frame = scan
-                elif scan.index[0] - self.frame.index[0] > dt.timedelta(seconds=self.maxblock):
-                    logger.info("max block size reached at %s", self.frame.index[-1].isoformat())
-                    frame = self.frame
-                    self.frame = scan
                 elif self.is_contiguous(self.frame, scan):
                     self.frame = pd.concat([self.frame, scan])
+                    period = self.get_period(self.frame)
+                    if period >= dt.timedelta(seconds=self.maxblock):
+                        frame = self.frame
+                        self.frame = scan
                 else:
                     frame = self.frame
                     self.frame = scan
             if frame is not None:
                 first = frame.index[0]
                 last = frame.index[-1]
-                if first + dt.timedelta(seconds=self.minblock) > last:
-                    logger.error("block of scans is too short, from %s to %s ",
-                                 first.isoformat(), last.isoformat())
+                period = self.get_period(frame)
+                if period < dt.timedelta(seconds=self.minblock):
+                    logger.error("block of scans is too short (%s), from %s to %s ",
+                                 period, first.isoformat(), last.isoformat())
                     frame = None
             if scan is None or frame is not None:
                 break
@@ -339,7 +358,7 @@ def apply_args(hf: ReadHotfilm, argv: list[str] or None):
                         "like %%Y%%m%%d_%%H%%M%%S.")
     parser.add_argument("--timeformat",
                         help="Timestamp format, iso or %% spec pattern.  "
-                        "Use %s.%f to get floating point seconds since epoch.")
+                        "Use %%s.%%f for floating point seconds since epoch.")
     parser.add_argument("--log", choices=['debug', 'info', 'error'],
                         default='info')
     args = parser.parse_args(argv)
@@ -377,7 +396,7 @@ if __name__ == "__main__":
 
 
 _scan = """
-2023 07 20 00:00:00.0395 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
+2023 07 20 01:02:03.3950 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
 """.strip()
 
 
@@ -394,7 +413,8 @@ def test_parse_line():
     assert len(y) == 8
     when: dt.datetime
     when = x[0]
-    assert when.isoformat() == "2023-07-20T00:00:00.039500+00:00"
+    assert when.isoformat() == "2023-07-20T01:02:03.395000+00:00"
+    assert when.strftime("%Y%m%d_%H%M%S") == "20230720_010203"
     assert x[-1] == when + (7 * dt.timedelta(microseconds=125000))
     assert y[0] == 2.4023
     assert y[-1] == 2.4093
@@ -418,3 +438,12 @@ def test_time_format():
     assert hf.format_time(when) == "2023-07-23T02:03:04.765430+00:00"
     hf.set_time_format("%H:%M:%S.%f")
     assert hf.format_time(when) == "02:03:04.765430"
+
+
+def test_s_format():
+    hf = ReadHotfilm()
+    hf.timeformat = "%s.%f"
+    when = dt.datetime(2023, 8, 8, 18, 6, 37, 0, tzinfo=dt.timezone.utc)
+    epoch = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+    assert hf.format_time(when) == "1691517997.000000"
+    assert (when - epoch).total_seconds() == 1691517997
