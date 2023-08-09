@@ -15,7 +15,9 @@ Export('labjack')
 
 env = Environment(tools=['default', 'buildmode', 'nidas', 'gitinfo',
                          'labjack'])
-env.Append(CPPDEFINES=["REPO_REVISION=\\\"${REPO_REVISION}\\\""])
+if env.get('REPO_REVISION') != 'unknown':
+    env.Append(CPPDEFINES=["REPO_REVISION=\\\"${REPO_REVISION}\\\""])
+    env.Append(CPPDEFINES=["REPO_HASH=\\\"${REPO_HASH}\\\""])
 env.Append(CXXFLAGS=['-std=c++11', '-Wno-deprecated', '-fpic', '-fPIC',
                      '-rdynamic'])
 env.Append(LINKFLAGS=['-fpic', '-fPIC', '-rdynamic'])

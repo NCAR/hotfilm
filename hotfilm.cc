@@ -539,6 +539,22 @@ setProcessPriority()
 }
 
 
+std::string
+version_string()
+{
+    std::ostringstream out;
+    out << "NIDAS version: " << Version::getSoftwareVersion()
+        << "; hotfilm version: " << HOTFILM_VERSION;
+#ifdef REPO_REVISION
+    std::string hash = REPO_HASH;
+    hash = hash.substr(0, 12);
+    out << "; hotfilm repo revision: " << REPO_REVISION
+        << "-" << hash;
+#endif
+    return out.str();
+}
+
+
 int main(int argc, char const *argv[])
 {
     LabJackSensor labjack;
@@ -592,11 +608,7 @@ For TCP streams, buffer statistics are queried and reported.)""");
         }
         if (Version.asBool())
         {
-            cout << "NIDAS version: " << Version::getSoftwareVersion() << endl;
-            cout << "hotfilm version: " << HOTFILM_VERSION << endl;
-#ifdef REPO_REVISION
-            cout << "hotfilm revision: " << REPO_REVISION << endl;
-#endif
+            cout << version_string() << endl;
             exit(0);
         }
         app.checkRequiredArguments();
@@ -609,6 +621,7 @@ For TCP streams, buffer statistics are queried and reported.)""");
         hf.STREAM_SETTLING_US = SettlingTime.asFloat();
         hf.AIN_ALL_RANGE = Range.asFloat();
 
+        ILOG(("") << version_string());
         ILOG(("") << "nchannels=" << hf.NUM_CHANNELS
                   << ", resolution=" << hf.STREAM_RESOLUTION_INDEX
                   << ", scanrate=" << hf.INIT_SCAN_RATE
