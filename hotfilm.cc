@@ -883,9 +883,17 @@ stream()
             {
                 if (channel == counter_index)
                 {
-                    // look for a pps counter change.
+                    bool changed = false;
+                    // look for a pps counter change.  we don't really want to
+                    // count -9999 occurrences as changes, so this could be
+                    // improved to ignore those.  it's not critical though,
+                    // since samples containing fill values will be thrown out
+                    // and re-synchronized anyway.
                     if (pps_count == -1)
+                    {
                         pps_count = *idp;
+                        changed = true;
+                    }
                     else if (pps_count != *idp)
                     {
                         pps_step = scan + nscans_in_sample;
@@ -899,6 +907,15 @@ stream()
                              << UTime(timestamp).format(true, "%H:%M:%S.%4f"));
                         pps_count = *idp;
                         timestamp_to_after = after - timestamp;
+                        changed = true;
+                    }
+                    // make sure buffer overflows are noted in the log and not
+                    // only observable in the data.
+                    if (changed && pps_count == LJM_DUMMY_VALUE)
+                    {
+                        PLOG(("") << "dummy value " << pps_count
+                                  << " in pps_count at scan " << pps_step
+                                  << ": scans were dropped!");
                     }
                 }
                 *(sdp++) = *idp;
