@@ -131,7 +131,7 @@ filter samples at best or possibly crash if `-p` is used with the files.  This
 is being fixed on the `buster` branch and will eventually be fixed in a NIDAS
 release.
 
-### Plotting
+## Plotting
 
 There is a python web application script, built on the bokeh framework, for
 plotting the channel data in real time.  It runs `data_dump` connected to the
@@ -161,7 +161,11 @@ Then browse to url `http://192.168.1.10:5006/`.
 The browser app can plot one of the four channels in either the time or
 frequency domain, for each second of data output as a sample.
 
-### Diagnostics
+This is a typical web plot for M2HATS:
+
+![Typical web plot](hotfilm_20230808_171339.png)
+
+## Diagnostics
 
 This is an example of using `data_dump` to show all the 1-second statistics
 and diagnostics without the full 2000-point 1-second time series:
@@ -180,28 +184,37 @@ daq@dsm214:~/hotfilm $ data_dump -i -1,501 -i -1,510-513 hotfilm_20230629_203645
 Exception: EOFException: hotfilm_20230629_203645.dat: open: EOF
 ```
 
-Sample 501 has 5 variables:
+Sample 501 has 6 variables:
 
-- PPS count: latest counter value for the PPS DIO channel.  This will be 0 if
+- **PPS count**: latest counter value for the PPS DIO channel.  This will be 0 if
   no PPS pulses have been ever counted by the LabJack.  It should normally
   increment by one for each sample.
-- PPS index (aka step): index of the counter change (PPS pulse) in the scans
-  in the 1-second sample, from 0 to 1999.  If -1, then no change in the PPS
-  counter was detected in this sample, so the time tags were not adjusted to
+- **PPS step**: index into the 1-second sample at which the PPS pulse counter
+  changes (steps), from 0 to 1999.  If -1, then no change in the PPS counter
+  was detected in this sample, so the time tags were not adjusted to
   synchronize with the PPS time.
-- Device scan backlog: scans left in the device buffer after the last read;
-  should be near zero and not increasing.
-- Host scan backlog: scans still in the host-side buffer; should be near zero
-  and not increasing.
-- Time of last read in ms: this should be close to 500 ms.  The stream is
+- **Device scan backlog**: scans left in the device buffer after the last
+  read; should be near zero and not increasing.
+- **Host scan backlog**: scans still in the host-side buffer; should be near
+  zero and not increasing.
+- **Time of last read in ms**: this should be close to 500 ms.  The stream is
   configured to read half a second of samples at a time.  So the time spent in
   the read call should be mostly waiting for a half-second of scans to fill
-  up, or about 500 ms.  If it gets small then the host sample writing has
-  fallen behind and is catching up.  If it gets large then the reads from the
-  device are being delayed, such as by network congestion or delays in the LJM
-  library itself.
+  up, or about 500 ms.  If it gets small then the host scan reading has fallen
+  behind the LabJackM library buffer and is catching up.  If it gets large
+  then the reads from the device are being delayed, such as by network
+  congestion or delays in the LJM library itself.
+- **Timetag to system time**: This is the difference in microseconds from the
+  sample time to the system time used to derive the sample time.  When a PPS
+  counter change is detected in a scan, the sample time is computed according
+  to the PPS step and the current system time.  (See [Time
+  Tagging](#time-tagging).)  If the step happens in the second scan of a
+  sample, meaning the PPS step index is 1000-1999, then the offset should be
+  close to 1 second, or 1e6 microseconds.  Otherwise, when the step happens in
+  the first scan, then the offset should be close to half a second, or 5e5
+  microseconds.
 
-Samples 510-513 are the avg/min/max for channels 0-3 over the full second of
+Samples 510-513 are the mean/min/max for channels 0-3 over the full second of
 data in the corresponding samples 520-523.
 
 Showing stats on any of the samples can indicate if there are any
@@ -220,6 +233,82 @@ Logging can also be helpful.  Turn on debugging log messages with `--log
 debug`.  The `--diag` command-line argument enables extra LJM calls to report
 on the TCP buffer status and check for skipped scans.  However, for normal
 operations, that probably adds more overhead than it's worth.
+
+### Fill values
+
+The LJM stream read function can return data which contains *dummy* values of
+-9999.  There is documentation (below) with some description of the condition,
+but it does not say exactly where the -9999 values come from.  The
+`LJM_eStreamRead()` call can return data with dummy values even without
+returning an error value, so it seems like the only way to know if scans have
+been missed is to check if any values are dummy values.
+
+- [LJM_eStreamRead()](https://labjack.com/pages/support?doc=%2Fsoftware-driver%2Fljm-users-guide%2Festreamread%2F)
+- [-9999 values in data](https://labjack.com/support/software/api/ljm/streaming-lots-of-9999-values)
+
+A `data_dump` of just the 501 samples looks like this when the buffer underrun
+occurs:
+
+```plain
+2023 08 08 00:16:02.7705       1      24      22746        459          0         99        508 5.6186e+05
+2023 08 08 00:16:04.1315   1.361      24      -9999       1737          0       1402       1201 1.4037e+06
+2023 08 08 00:16:04.3500  0.2185      24      22748       1300          0         17        294 1.4802e+06
+2023 08 08 00:16:05.7705   1.421      24      22749        459          0         65        519 5.4248e+05
+2023 08 08 00:16:06.7705       1      24      22750        459          0         10        446 5.7726e+05
+```
+
+The [T-Series
+Datasheet](https://files.labjack.com/datasheets/LabJack-T-Series-Datasheet.pdf)
+explains that the LJM library adds the dummy values according to how many
+scans the Labjack device dropped due to a device buffer overflow.  The
+datasheet seems to be the primary, if not only, reference for the device
+buffer size setting, `STREAM_BUFFER_SIZE_BYTES`.  The dummy values could
+happen because the labjack device buffer fills up due to network delays to the
+host.  However, if the device buffer is overflowing, then perhaps the device
+backlog metric is not useful, since it is always reported as 0.  
+The LJM library has a buffer size setting named
+`LJM_STREAM_BUFFER_MAX_NUM_SECONDS`, which is supposed to default to 20
+seconds as long as the system memory supports it.  Furthermore, if the LJM
+library buffer overflows, then the stream read returns `LJME_LJM_BUFFER_FULL`,
+so the problem is not in the LJM buffer.  There are also timeout configuration
+settings for the LJM library which affect `LJM_eStreamRead()`, such as
+`LJM_SEND_RECEIVE_TIMEOUT_MS`, but by default the stream read is not supposed
+to timeout, so that seems an unlikely culprit.
+
+Further development will see if changing `STREAM_BUFFER_SIZE_BYTES` can reduce
+the occurrence of dummy values.
+
+### Broken hotfilm
+
+If a hotfilm is broken or not installed, then the bridge reports a relatively
+constant voltage, usually around 2.47 V:
+
+```plain
+2023 07 21 18:00:10.7670       0 200, 510      12     2.4747     2.4744      2.475
+2023 07 21 18:00:10.7670       0 200, 511      12     2.4737     2.4734     2.4741
+2023 07 21 18:00:10.7670       0 200, 512      12     2.4969     2.4965     2.4975
+2023 07 21 18:00:10.7670       0 200, 513      12     2.4757     2.4753     2.4763
+```
+
+### Shorted hotfilm
+
+It has happened at M2HATS that a hotfilm probe mount shorts, so the bridge
+tries to maintain voltage to heat something which has no resistance, and the
+LabJack will see a voltage which jumps between 0 and about 7.3 V:
+
+```plain
+2023 07 22 23:20:43.4780       0 200, 511      12  0.0027043    -0.3827      7.815
+2023 07 22 23:20:44.4780       0 200, 511      12     1.6994    0.13827     7.3154
+```
+
+The web plots look like this:
+
+![Shorted plots](hotfilm_screenshot_20230729_111733.png)
+
+### Shorting cap
+
+A shorting cap can be plugged into the BNC inputs on the LabJack D37 board, in
+which case the voltage on that channel should be close to zero and steady.
 
 ## Exporting hotfilm data
 
@@ -254,12 +343,11 @@ only the diagnostic samples.
 
 The `hotfilm` program runs similarly to the NIDAS `dsm` process.  However,
 rather than `DSMEngine` controlling the sensor opening, polling, and reading,
-the `hotfilm` program calls the LabJackM library in sequence to open the
-device and read the stream, blocking where needed.  This simplifies the logic
-of the program and the use of the LabJackM library.  The program is also built
-outside of the NIDAS source tree, so it can be built easily on the DSM3 Pi
-against buster branch, and so the LabJackM library does not need to be linked
-into NIDAS.
+the `hotfilm` program calls the LabJackM library to open the device and read
+the stream, blocking where needed.  This simplifies the logic of the program
+and the use of the LabJackM library.  The program is also built outside of the
+NIDAS source tree, so it can be built easily on the DSM3 Pi against buster
+branch, and so the LabJackM library does not need to be linked into NIDAS.
 
 The LabJackM library does provide a callback API using
 [SetStreamCallback](https://labjack.com/pages/support?doc=/software-driver/ljm-users-guide/setstreamcallback/),
@@ -267,7 +355,8 @@ so the callback can be used to notify when the stream buffer is full and ready
 to read with
 [LJM_eStreamRead](https://labjack.com/pages/support?doc=/software-driver/ljm-users-guide/estreamread/).
 That could allow the stream reads to be integrated with the NIDAS
-SensorHandler, if the LabJack sensor provided something like a file descriptor
+`SensorHandler`, if the LabJack sensor provided something like a file
+descriptor
 on a pipe to which the callback could write to indicate data are ready to be
 read.
 
@@ -280,7 +369,7 @@ command-response mode, so that is what `hotfilm` uses.
 
 ### PPS Counter
 
-The DIO0 channel is configured as a counter to detect PPS pulses.  Given
+The DIO0 channel is configured as a counter to detect PPS pulses.  Given the
 register settings below:
 
 ```plain
@@ -353,9 +442,9 @@ that the system time "seems reasonable" relative to the previous sample time
 and the value of `pps_step`.  Or, since the time spent in the read is likely
 to coincide with the time covered by the count, then maybe the average of the
 system time before and after the stream read would be a better starting point
-to determine the time at the PPS pulse, perhaps interpolated by  the step
-index so the time `after` the read returns is more heavily weighted the larger
-the step index.  This seems risky, though, since there is a chance the time
+to determine the time at the PPS pulse, perhaps interpolated by the step index
+so the time `after` the read returns is more heavily weighted the larger the
+step index.  This seems risky, though, since there is a chance the time
 `before` the read could pull the estimated system time of the pulse into the
 previous second.  The interpolated time might have to be incremented by a
 half-second before being truncated.
