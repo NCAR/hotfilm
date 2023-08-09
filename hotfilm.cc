@@ -1,4 +1,6 @@
 
+#include "hotfilm.h"
+
 #include <LabJackM.h>
 
 #include <string>
@@ -14,6 +16,7 @@
 #include <nidas/core/Project.h>
 #include <nidas/core/DSMConfig.h>
 #include <nidas/core/NidasApp.h>
+#include <nidas/core/Version.h>
 #include <nidas/core/FileSet.h>
 #include <nidas/core/DSMEngine.h>
 #include <nidas/core/SampleOutputRequestThread.h>
@@ -148,6 +151,20 @@ set_name(int handle, const std::string& name, double value)
         msg << "eWriteName(" << handle << ", " << name << ", " << value << ")";
         check_error(err, msg.str());
     }
+}
+
+
+void
+read_name(int handle, const std::string& name, double* value)
+{
+    int err = LJM_eReadName(handle, name.c_str(), value);
+    if (err)
+    {
+        std::ostringstream msg;
+        msg << "eReadName(" << handle << ", " << name << ")";
+        check_error(err, msg.str());
+    }
+    ILOG(("read: ") << name << "=" << value);
 }
 
 
@@ -332,6 +349,19 @@ configure_stream()
         ILOG(("enabling internally-clocked stream:"));
     }
     set_name(handle, "STREAM_CLOCK_SOURCE", STREAM_CLOCK_SOURCE);
+
+    double deviceBufferBytes{0};
+    read_name(handle, "STREAM_BUFFER_SIZE_BYTES", &deviceBufferBytes);
+
+    // What do we want the buffer size to be?  The number of bytes is the
+    // number scans we want in the buffer times the number of channels times 2
+    // bytes per sample.  If we're seeing 1.5 second reads, that means up to
+    // 3k scans could be sitting in the device.  The value must be a power of
+    // 2, and the max bytes is 32768.
+
+    // The max of 32768 is 4096 scans of 4 channels, so only 2 seconds.  So
+    // may as well set it to the max.
+    set_name(handle, "STREAM_BUFFER_SIZE_BYTES", 32768);
 
     // Configure the analog inputs' negative channel, range, settling time and
     // resolution.
@@ -531,6 +561,8 @@ For TCP streams, buffer statistics are queried and reported.)""");
                              to_string(hf.STREAM_SETTLING_US));
     NidasAppArg Range("--range", "V", "Upper limit in Volts",
                       to_string(hf.AIN_ALL_RANGE));
+    NidasAppArg Version("-v,--version", "",
+                        "Print NIDAS and hotfilm versions.");
 
     Logger* logger = Logger::getInstance();
     LogConfig lc("info");
@@ -543,13 +575,22 @@ For TCP streams, buffer statistics are queried and reported.)""");
                             ScanRate | SettlingTime | Range |
                             app.XmlHeaderFile | app.Hostname |
                             ReadCount | app.Username | Diagnostics |
-                            app.Help | app.Version | app.loggingArgs());
+                            app.Help | Version | app.loggingArgs());
         app.parseArgs(argc, argv);
         if (app.helpRequested())
         {
-            std::cout << "Usage: " << argv[0] << " [options] \n";
-            std::cout << app.usage();
+            cout << "Usage: " << argv[0] << " [options] \n";
+            cout << app.usage();
             return 0;
+        }
+        if (Version.asBool())
+        {
+            cout << "NIDAS version: " << Version::getSoftwareVersion() << endl;
+            cout << "hotfilm version: " << HOTFILM_VERSION << endl;
+#ifdef REPO_REVISION
+            cout << "hotfilm revision: " << REPO_REVISION << endl;
+#endif
+            exit(0);
         }
         app.checkRequiredArguments();
         hf.NUM_READS = ReadCount.asInt();

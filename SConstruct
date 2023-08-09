@@ -13,7 +13,9 @@ def labjack(env):
 Export('labjack')
 
 
-env = Environment(tools=['default', 'buildmode', 'nidas', 'labjack'])
+env = Environment(tools=['default', 'buildmode', 'nidas', 'gitinfo',
+                         'labjack'])
+env.Append(CPPDEFINES=["REPO_REVISION=\\\"${REPO_REVISION}\\\""])
 env.Append(CXXFLAGS=['-std=c++11', '-Wno-deprecated', '-fpic', '-fPIC',
                      '-rdynamic'])
 env.Append(LINKFLAGS=['-fpic', '-fPIC', '-rdynamic'])
