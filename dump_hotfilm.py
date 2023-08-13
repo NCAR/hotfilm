@@ -86,6 +86,10 @@ class ReadHotfilm:
         else:
             self.timeformat = fspec
 
+    def set_min_max_block_minutes(self, mmin: int, mmax: int):
+        self.minblock = mmin*60
+        self.maxblock = mmax*60
+
     def format_time(self, when: dt.datetime):
         # The %s specifier to strftime does the wrong thing if TZ is not UTC.
         # Rather than modify the environment just for this, interpolate %s
@@ -348,10 +352,10 @@ def apply_args(hf: ReadHotfilm, argv: list[str] or None):
                         "Useful for simulating real-time data when called "
                         "from the web plotting app with data files.",
                         default=0)
-    parser.add_argument("--min", type=int, default=30*60,
-                        help="Minimum seconds to write into a file.")
-    parser.add_argument("--max", type=int, default=60*60,
-                        help="Max seconds to write into a file.")
+    parser.add_argument("--min", type=int, default=30,
+                        help="Minimum minutes to write into a file. (30)")
+    parser.add_argument("--max", type=int, default=60,
+                        help="Maximum minutes to write into a file. (60)")
     parser.add_argument("--netcdf", help="Write data to named netcdf file")
     parser.add_argument("--text", help="Write data in text columns to file.  "
                         "Filenames can include time specifiers, "
@@ -367,8 +371,7 @@ def apply_args(hf: ReadHotfilm, argv: list[str] or None):
     hf.set_source(args.source)
     if args.channels:
         hf.select_channels(args.channels)
-    hf.minblock = args.min
-    hf.maxblock = args.max
+    hf.set_min_max_block_minutes(args.min, args.max)
     if args.begin:
         hf.begin = dt.datetime.fromisoformat(args.begin)
     if args.end:
