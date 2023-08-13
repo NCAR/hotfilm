@@ -224,7 +224,6 @@ class ReadHotfilm:
         if not cont:
             logger.error("gap detected: %d us from %s to %s",
                          gap, last.isoformat(), next.isoformat())
-            self.adjust_time = 0
         elif self.adjust_time:
             scan.index += dt.timedelta(microseconds=self.adjust_time)
 
@@ -245,6 +244,7 @@ class ReadHotfilm:
         Accumulate scans until there is a break, then return them.
         """
         frame = None
+        self.adjust_time = 0
         while True:
             scan = self.get_scan()
             if scan is None:
@@ -269,7 +269,8 @@ class ReadHotfilm:
                 last = frame.index[-1]
                 period = self.get_period(frame)
                 if period < dt.timedelta(seconds=self.minblock):
-                    logger.error("block of scans is too short (%s), from %s to %s ",
+                    logger.error("block of scans is too short (%s), "
+                                 "from %s to %s",
                                  period, first.isoformat(), last.isoformat())
                     frame = None
             if scan is None or frame is not None:
