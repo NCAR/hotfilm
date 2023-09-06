@@ -617,6 +617,16 @@ For TCP streams, buffer statistics are queried and reported.)""");
         hf.ENABLE_PPS_COUNTER = !DisablePPS.asBool();
         hf.NUM_CHANNELS = NumChannels.asInt();
         hf.INIT_SCAN_RATE = ScanRate.asFloat();
+        // Everything will just work out much easier if the scan rate samples
+        // fall on regular even microsecond intervals.
+        if (fmod(hf.INIT_SCAN_RATE, 2.0) != 0 ||
+            fmod(1e6, hf.INIT_SCAN_RATE) != 0)
+        {
+            cerr << "scan rate is not even or "
+                    "not a factor of 1e6 microseconds: " 
+                 << hf.INIT_SCAN_RATE << endl;
+            exit(1);
+        }
         hf.SCANS_PER_READ = hf.INIT_SCAN_RATE / 2;
         hf.STREAM_SETTLING_US = SettlingTime.asFloat();
         hf.AIN_ALL_RANGE = Range.asFloat();
@@ -726,9 +736,8 @@ stream()
     ILOG(("Stream started. Actual scan rate: %.02f Hz (%.02f sample rate)",
           scanRate, scanRate * numChannels));
 
-    // Technically scan rate is a double and does not need to divide evenly
-    // into a second.  So use the scans per read to compute the samples per
-    // second, knowing that it was chosen as half the scan rate.
+    // Use scans per read to compute samples per second, knowing that it was
+    // chosen as half the scan rate.
     unsigned int samples_per_second = 2 * scansPerRead;
 
     // Create Samples to hold the stats and the channels.  Unlike the data
@@ -806,6 +815,7 @@ stream()
     int pps_step = -1;
     double backlog_pct = 0;
     dsm_time_t timestamp_to_after{0};
+    static LogContext lp(LOG_DEBUG);
     for (iteration = 0; numReads == 0 || iteration < numReads; iteration++)
     {
         // Get a timestamp before the read and after to get stats on how long
@@ -841,7 +851,6 @@ stream()
             DLOG(("iteration: %d - deviceScanBacklog: %d, LJMScanBacklog: %d",
                   iteration, deviceScanBacklog, LJMScanBacklog));
         }
-        static LogContext lp(LOG_DEBUG);
         if (lp.active())
         {
             for (channel = 0; channel < numChannels; channel++) {

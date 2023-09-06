@@ -17,11 +17,6 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
 
 
-def sinewave(x, amp=1.0, freq=1.0, phase=0.0, offset=0.0):
-    angles = x * 2 * np.pi * freq - phase
-    return amp * np.sin(angles) + offset
-
-
 # only modify from a Bokeh session callback
 timesource = ColumnDataSource(data=dict(x=[0], y=[0]))
 specsource = ColumnDataSource(data=dict(x=[0], y=[0]))

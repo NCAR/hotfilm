@@ -229,7 +229,7 @@ class ReadHotfilm:
 
         return cont
 
-    def get_period(self, frame):
+    def get_period(self, frame) -> dt.timedelta:
         """
         Return the time period covered by this frame, which includes the
         interval after the last point.
@@ -319,8 +319,9 @@ class ReadHotfilm:
                 break
             when = data.index[0]
             path = when.strftime(filespec)
-            logger.info("writing %d seconds to file %s",
-                        len(data)/2000, path)
+            period = self.get_period(data)
+            logger.info("writing %g seconds to file %s",
+                        period.total_seconds(), path)
             out = open(path, "w")
             out.write("time")
             for c in data.columns:
