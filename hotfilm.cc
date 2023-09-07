@@ -192,9 +192,13 @@ public:
     double STREAM_SETTLING_US = 0;
     double AIN_ALL_RANGE = 10;
 
+    // This is used to derive number of scans per read, in order to get an
+    // integral number of reads to collect a full second of data.
+    int READS_PER_SECOND = 2;
+
     // How many scans to get per call to LJM_eStreamRead. INIT_SCAN_RATE/2 is
     // recommended
-    int SCANS_PER_READ = INIT_SCAN_RATE / 2;
+    int SCANS_PER_READ = INIT_SCAN_RATE / READS_PER_SECOND;
 
     // How many times to call LJM_eStreamRead before calling LJM_eStreamStop
     int NUM_READS = 0;
@@ -579,6 +583,8 @@ For TCP streams, buffer statistics are queried and reported.)""");
                                 to_string(hf.STREAM_RESOLUTION_INDEX));
     NidasAppArg ScanRate("--scanrate", "HZ", "Scan rate in Hz",
                          to_string(hf.INIT_SCAN_RATE));
+    NidasAppArg ReadRate("--readrate", "HZ", "Device reads per second, "
+                         "1, 2, or 4.", "2");
     NidasAppArg SettlingTime("--settle", "US",
                              "Settling time in microseconds",
                              to_string(hf.STREAM_SETTLING_US));
@@ -595,7 +601,7 @@ For TCP streams, buffer statistics are queried and reported.)""");
         app.XmlHeaderFile.setRequired();
         app.Hostname.setDefault("hotfilm");
         app.enableArguments(DisablePPS | NumChannels | ResolutionIndex |
-                            ScanRate | SettlingTime | Range |
+                            ScanRate | ReadRate | SettlingTime | Range |
                             app.XmlHeaderFile | app.Hostname |
                             ReadCount | app.Username | Diagnostics |
                             app.Help | Version | app.loggingArgs());
@@ -619,15 +625,24 @@ For TCP streams, buffer statistics are queried and reported.)""");
         hf.INIT_SCAN_RATE = ScanRate.asFloat();
         // Everything will just work out much easier if the scan rate samples
         // fall on regular even microsecond intervals.
-        if (fmod(hf.INIT_SCAN_RATE, 2.0) != 0 ||
+        if (fmod(hf.INIT_SCAN_RATE, 4) != 0 ||
             fmod(1e6, hf.INIT_SCAN_RATE) != 0)
         {
-            cerr << "scan rate is not even or "
+            cerr << "scan rate not divisible by 4 or "
                     "not a factor of 1e6 microseconds: " 
                  << hf.INIT_SCAN_RATE << endl;
             exit(1);
         }
-        hf.SCANS_PER_READ = hf.INIT_SCAN_RATE / 2;
+        hf.READS_PER_SECOND = ReadRate.asInt();
+        if (hf.READS_PER_SECOND != 1 &&
+            hf.READS_PER_SECOND != 2 &&
+            hf.READS_PER_SECOND != 4)
+        {
+            cerr << "invalid number of reads per second: "
+                 << hf.READS_PER_SECOND << endl;
+            exit(1);
+        }
+        hf.SCANS_PER_READ = hf.INIT_SCAN_RATE / hf.READS_PER_SECOND;
         hf.STREAM_SETTLING_US = SettlingTime.asFloat();
         hf.AIN_ALL_RANGE = Range.asFloat();
 
@@ -736,9 +751,14 @@ stream()
     ILOG(("Stream started. Actual scan rate: %.02f Hz (%.02f sample rate)",
           scanRate, scanRate * numChannels));
 
-    // Use scans per read to compute samples per second, knowing that it was
-    // chosen as half the scan rate.
-    unsigned int samples_per_second = 2 * scansPerRead;
+    // Apparently the labjack can return a different scan rate than what was
+    // requested, but that's not something this code can handle.
+    if (scanRate != INIT_SCAN_RATE)
+    {
+        ELOG(("actual scan rate differs from requested, aborting."));
+        exit(2);
+    }
+    unsigned int samples_per_second = scanRate;
 
     // Create Samples to hold the stats and the channels.  Unlike the data
     // from the labjack which stores by channel first and then by scan, and

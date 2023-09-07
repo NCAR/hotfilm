@@ -2,6 +2,13 @@
 
 ## [unreleased] - Pending changes
 
+In support of 4K sampling, constrain the scan rate option to divide evenly
+into 1e6 microseconds and be divisible by the allowed read rates.  The read
+rate can be 1, 2, or 4 reads per second, in case modifiying the size of each
+read (which also depends on the scan rate and number of channels) improves the
+overall network throughput and avoids dropped scans from device buffer
+overflows.
+
 ## [1.1] - 2023-08-09
 
 Set STREAM_BUFFER_SIZE_BYTES in the LabJack to the maximum value of 32768,
