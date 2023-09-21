@@ -14,9 +14,9 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-# this is the data_dump prefix without the delta column
-_prefix = "2023 06 30 21:59:27.8075 200, 521    8000 1 2 3 4"
-
+# this is the data_dump timestamp prefix that needs to be matched:
+#
+# 2023 06 30 21:59:27.8075 200, 521    8000 1 2 3 4
 
 _prefix_rx = re.compile(
     r"^(?P<year>\d{4}) (?P<month>\d{2}) (?P<day>\d{2}) "
@@ -25,9 +25,10 @@ _prefix_rx = re.compile(
 
 
 def datetime_from_match(match):
-    seconds = float(match['second'])
-    usecs = int((seconds - int(seconds)) * 1000000)
+    # split seconds at the decimal to get microseconds
+    seconds, _, usecs = match['second'].partition('.')
     seconds = int(seconds)
+    usecs = int((usecs + '000000')[:6]) if usecs else 0
     when = dt.datetime(int(match['year']), int(match['month']),
                        int(match['day']),
                        int(match['hour']), int(match['minute']),
@@ -36,21 +37,14 @@ def datetime_from_match(match):
     return when
 
 
-def test_datetime_from_match():
-    m = _prefix_rx.match(_prefix)
-    assert m
-    when = datetime_from_match(m)
-    assert when
-    xwhen = dt.datetime(2023, 6, 30, 21, 59, 27, 807500, dt.timezone.utc)
-    assert when == xwhen
-
-
 class ReadHotfilm:
     """
     Read the hotfilm 1-second time series from data_dump.
     """
     ISO = "iso"
     EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+
+    adjust_time: int
 
     def __init__(self):
         self.source = ["sock:192.168.1.220:31000"]
@@ -72,8 +66,8 @@ class ReadHotfilm:
         self.minblock = 30*60
         # maximum number of seconds to include in a block
         self.maxblock = 4*60*60
-        # adjustment to the times to get them line up when they get off by one
-        # sample
+        # adjustment to successive sample times to line them up with previous
+        # samples as the labjack clock drifts relative to the system time.
         self.adjust_time = 0
 
     def set_time_format(self, fspec):
@@ -197,37 +191,79 @@ class ReadHotfilm:
 
     def is_contiguous(self, frame: pd.DataFrame, scan: pd.DataFrame):
         """
-        Return true if @p scan follows right at the end of @p frame.
-        """
-        last = frame.index[-1]
-        next = scan.index[0]
-        gap = (next - last) / dt.timedelta(microseconds=1)
-        gap += self.adjust_time
-        adjust = 0
-        # if it skips a sample or two, adjust to line them back up.
-        if 1400 < gap < 1600:
-            adjust -= 1000
-        elif 900 < gap < 1100:
-            adjust -= 500
-        elif gap < 250:
-            adjust += 500
-        if adjust:
-            gap += adjust
-            self.adjust_time += adjust
-            logger.info("for scan starting at %s, "
-                        "time adjustment is now %d us",
-                        scan.index[0].isoformat(), self.adjust_time)
+        Return true if @p scan looks contiguous with @p frame, and if so,
+        adjust the timestamps in @p scan accordingly.
 
-        # if there is still too large a gap, then do not adjust the
-        # times in the next scan, and instead reset the adjustment
-        cont = (gap < 550)
-        if not cont:
-            logger.error("gap detected: %d us from %s to %s",
-                         gap, last.isoformat(), next.isoformat())
-        elif self.adjust_time:
+        The next 1-second scan is contiguous if it starts within two scan
+        periods relative to the expected start.  This is not trying to detect
+        shifts of whole seconds, where the wrong system second was used as the
+        reference for the PPS.  That is (hopefully) handled during
+        acquisition.  This just allows for the PPS index to drift over time
+        because the labjack clock is not synchronized to an absolute
+        reference.  As the PPS index shifts, then the sample time will shift
+        by the scan interval.  So the generated sample times drift relative to
+        actual absolute time, but the generated times will have the expected
+        regular interval matching the scan rate.  If the adjustment gets too
+        large, flag the next frame as not contigous so the next sample time
+        resets to the absolute time when it was recorded.
+        """
+        next = scan.index[0] + dt.timedelta(microseconds=self.adjust_time)
+        interval = self.get_interval(frame)
+        # the expected start of the next scan is last + interval, and the
+        # shift between expected time and actual time is calculated with the
+        # current time adjustment included.  the shift is how much to add to
+        # the next frame to match the expected next times.
+        last = frame.index[-1]
+        xnext = last + dt.timedelta(microseconds=interval)
+        shift = (next - xnext) / dt.timedelta(microseconds=1)
+        # if the difference is only an interval or two, then assume the scans
+        # are continguous but the PPS shifted, and set the adjustment so next
+        # + adj lines up with xnext.
+        logger.debug("""
+ next - xnext: %s
+  adjust (us): %d
+   frame ends: %s
+interval (us): %d
+scan expected: %s
+adj scan strt: %s
+ shift (usec): %d""",
+                     (next - xnext), self.adjust_time,
+                     frame.index[-1].isoformat(), interval,
+                     xnext.isoformat(),
+                     next, shift)
+
+        # include the shift in the new adjustment, then check if the
+        # adjustment has grown too large or the latest shift is too large.
+        self.adjust_time -= shift
+        if shift == 0:
+            pass
+        elif abs(shift) > 2*interval:
+            logger.error("%d usec shift from %s to %s is too large",
+                         shift, frame.index[-1].isoformat(), next.isoformat())
+        elif abs(self.adjust_time) > 5e5:
+            # half second is too far out of sync
+            logger.error("%d usec shift from %s to %s: "
+                         "total adjustment %d usec "
+                         "is too large and will be reset ",
+                         shift, frame.index[-1].isoformat(), next.isoformat(),
+                         self.adjust_time)
+        else:
+            logger.info("%d usec shift, for scan starting at %s, "
+                        "time adjustment is now %d us", shift,
+                        scan.index[0].isoformat(), self.adjust_time)
+            shift = 0
+
+        if shift == 0 and self.adjust_time:
+            # since adjust_time includes the latest shift, this should bring
+            # the given scan into alignment with given data frame.
             scan.index += dt.timedelta(microseconds=self.adjust_time)
 
-        return cont
+        return shift == 0
+
+    def get_interval(self, frame) -> int:
+        "Return microseconds between scans, the inverse of scan rate."
+        td = frame.index[-1] - frame.index[-2]
+        return td / dt.timedelta(microseconds=1)
 
     def get_period(self, frame) -> dt.timedelta:
         """
@@ -236,7 +272,8 @@ class ReadHotfilm:
         """
         first = frame.index[0]
         last = frame.index[-1]
-        period = last - first + dt.timedelta(microseconds=500)
+        interval = self.get_interval(frame)
+        period = last - first + dt.timedelta(microseconds=interval)
         return period
 
     def get_block(self):
@@ -260,7 +297,7 @@ class ReadHotfilm:
                     period = self.get_period(self.frame)
                     if period >= dt.timedelta(seconds=self.maxblock):
                         frame = self.frame
-                        self.frame = scan
+                        self.frame = None
                 else:
                     frame = self.frame
                     self.frame = scan
@@ -400,6 +437,26 @@ if __name__ == "__main__":
     main(sys.argv[1:])
 
 
+def test_datetime_from_match():
+    tests = {
+        "2023 06 30 21:59:27.8075 200, 521    8000 1 2 3 4":
+        dt.datetime(2023, 6, 30, 21, 59, 27, 807500, dt.timezone.utc),
+        "2023 06 30 21:59:27 200, 521    8000 1 2 3 4":
+        dt.datetime(2023, 6, 30, 21, 59, 27, 0, dt.timezone.utc),
+        "2023 06 30 21:59:27.0 200, 521    8000 1 2 3 4":
+        dt.datetime(2023, 6, 30, 21, 59, 27, 0, dt.timezone.utc),
+        "2023 07 20 01:02:04.3950 200, 521   8000 1 2 3 4":
+        dt.datetime(2023, 7, 20, 1, 2, 4, 395000, dt.timezone.utc),
+        "2023 07 20 01:02:04.000002 200, 521   8000 1 2 3 4":
+        dt.datetime(2023, 7, 20, 1, 2, 4, 2, dt.timezone.utc)
+    }
+    for prefix, xwhen in tests.items():
+        m = _prefix_rx.match(prefix)
+        assert m
+        when = datetime_from_match(m)
+        assert when == xwhen
+
+
 _scan = """
 2023 07 20 01:02:03.3950 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
 """.strip()
@@ -423,6 +480,81 @@ def test_parse_line():
     assert x[-1] == when + (7 * dt.timedelta(microseconds=125000))
     assert y[0] == 2.4023
     assert y[-1] == 2.4093
+
+
+def test_get_period():
+    hf = ReadHotfilm()
+    data = hf.parse_line(_scan)
+    period = hf.get_period(data)
+    interval = hf.get_interval(data)
+    assert interval == 125000
+    assert period.total_seconds() == 1
+
+
+_line1 = """
+2023 07 20 01:02:03.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
+""".strip()
+
+_line2 = """
+2023 07 20 01:02:04.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
+""".strip()
+
+
+def check_and_append(hf: ReadHotfilm, data: pd.DataFrame, next: pd.DataFrame,
+                     xcont: bool, xadjust: int):
+    """
+    Test data and next for contiguousness and match result against xcont.  If
+    contiguous, append next, verify interval spacing, and match next xadjust.
+    """
+    logger.debug("checking next scan %s contiguous: [%s, %s]",
+                 "is" if xcont else "is NOT",
+                 next.index[0].isoformat(),
+                 next.index[-1].isoformat())
+    assert hf.is_contiguous(data, next) == xcont
+    if xcont:
+        data = pd.concat([data, next])
+        logger.debug("after appending next, data frame is: [%s, %s]",
+                     data.index[0].isoformat(), data.index[-1].isoformat())
+        interval = dt.timedelta(microseconds=125000)
+        for i in range(1, len(data.index)):
+            assert data.index[i] - data.index[i-1] == interval
+        assert hf.adjust_time == xadjust
+    return data
+
+
+def test_is_contiguous():
+    hf = ReadHotfilm()
+    data = hf.parse_line(_line1)
+    xfirst = dt.datetime(2023, 7, 20, 1, 2, 3, 0, dt.timezone.utc)
+    assert data.index[0] == xfirst
+    # after the first scan adjust should still be zero.
+    assert hf.adjust_time == 0
+    next = hf.parse_line(_line2)
+    xfirst = dt.datetime(2023, 7, 20, 1, 2, 4, 0, dt.timezone.utc)
+    assert next.index[0] == xfirst
+    assert hf.adjust_time == 0
+    logger.debug("test next follows at exactly the right time")
+    data = check_and_append(hf, data, next, True, 0)
+    logger.debug("next is shifted ahead by 2 intervals")
+    interval = dt.timedelta(microseconds=125000)
+    next.index += 2*interval + dt.timedelta(seconds=1)
+    # still contiguous, but next is shifted back
+    xadjust = -2*interval / dt.timedelta(microseconds=1)
+    data = check_and_append(hf, data, next, True, xadjust)
+    # if the next scan is exactly a second later, then that is like shifting 2
+    # intervals relative to the previous scan, and the overall adjustment from
+    # the first scan is back to 0.
+    logger.debug("next follows 1 second later, shift is -250000")
+    next.index += dt.timedelta(seconds=1)
+    xadjust = 0
+    data = check_and_append(hf, data, next, True, xadjust)
+    logger.debug("next is 100 usec earlier, shift should be -100")
+    next.index += dt.timedelta(microseconds=999900)
+    xadjust += 100
+    data = check_and_append(hf, data, next, True, xadjust)
+    # finally, test that too large a shift triggers a reset
+    next.index += dt.timedelta(seconds=2)
+    data = check_and_append(hf, data, next, False, xadjust)
 
 
 _scanfill = """
