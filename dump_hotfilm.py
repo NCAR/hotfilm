@@ -194,10 +194,10 @@ class ReadHotfilm:
         Return true if @p scan looks contiguous with @p frame, and if so,
         adjust the timestamps in @p scan accordingly.
 
-        The next 1-second scan is contiguous if it starts within two scan
-        periods relative to the expected start.  This is not trying to detect
-        shifts of whole seconds, where the wrong system second was used as the
-        reference for the PPS.  That is (hopefully) handled during
+        The next 1-second scan is contiguous if it starts within 1 second and
+        two sample periods relative to the expected start.  This allows shifts
+        of whole seconds, where the wrong system second was used as the
+        reference for the PPS, since that might not be handled during
         acquisition.  This just allows for the PPS index to drift over time
         because the labjack clock is not synchronized to an absolute
         reference.  As the PPS index shifts, then the sample time will shift
@@ -206,6 +206,11 @@ class ReadHotfilm:
         regular interval matching the scan rate.  If the adjustment gets too
         large, flag the next frame as not contigous so the next sample time
         resets to the absolute time when it was recorded.
+
+        This also assumes that the very first scan in a block was aligned to
+        the correct second of absolute time, since all following scans will be
+        aligned to it.  I think in the worse case a block could be off by a
+        second.
         """
         next = scan.index[0] + dt.timedelta(microseconds=self.adjust_time)
         interval = self.get_interval(frame)
@@ -237,7 +242,7 @@ adj scan strt: %s
         self.adjust_time -= shift
         if shift == 0:
             pass
-        elif abs(shift) > 2*interval:
+        elif abs(shift) > 1e6 + 2*interval:
             logger.error("%d usec shift from %s to %s is too large",
                          shift, frame.index[-1].isoformat(), next.isoformat())
         elif abs(self.adjust_time) > 5e5:
