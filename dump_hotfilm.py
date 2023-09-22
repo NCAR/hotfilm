@@ -394,12 +394,16 @@ adj scan strt: %s
                                  "from %s to %s",
                                  period, first.isoformat(), last.isoformat())
                     scan_list.clear()
+
                 # if a block of scans has already been returned, or else there
                 # is no chance of more blocks because no scan is pending and
                 # this one was not skipped, then return None to signal the end
                 # of this current block.
                 if minreached or (self.next_scan is None and not skipped):
                     break
+
+                # reset the time adjustment for the next block
+                self.adjust_time = 0
 
         return None
 
