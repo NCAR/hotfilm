@@ -56,19 +56,21 @@ class ReadHotfilm:
         self.delay = 0
         # dataframe for the current scan as it accumulates channels
         self.scan = None
-        # accumulate scans into contiguous data frames
-        self.frame = None
+        # cache the start of the next block
+        self.next_scan = None
         # limit output to inside the begin and end times, if set
         self.begin = None
         self.end = None
         self.timeformat = self.ISO
         # minimum number of seconds required to consider a block good
-        self.minblock = 30*60
+        self.minblock = 15*60
         # maximum number of seconds to include in a block
-        self.maxblock = 4*60*60
+        self.maxblock = 120*60
         # adjustment to successive sample times to line them up with previous
         # samples as the labjack clock drifts relative to the system time.
         self.adjust_time = 0
+        # iterator which returns the next data line
+        self.line_iterator = None
 
     def set_time_format(self, fspec):
         """
@@ -110,11 +112,22 @@ class ReadHotfilm:
         logger.info("running: %s%s", command[:60],
                     "..." if command[60:] else "")
         self.dd = sp.Popen(self.cmd, stdout=sp.PIPE, text=True)
+        self.line_iterator = self.dd.stdout
 
     def select_channels(self, channels: list[int] or None):
         self.channels = [f"ch{ch}" for ch in channels] if channels else None
         logger.debug("selected channels: %s",
                      ",".join(self.channels) if self.channels else "all")
+
+    def next_line(self):
+        "Return next line from line iterator, or None."
+        line = None
+        try:
+            if self.line_iterator:
+                line = next(self.line_iterator)
+        except StopIteration:
+            pass
+        return line
 
     def get_data(self):
         """
@@ -122,7 +135,7 @@ class ReadHotfilm:
         """
         data = None
         while data is None:
-            line = self.dd.stdout.readline()
+            line = self.next_line()
             if not line:
                 break
             match = _prefix_rx.match(line)
@@ -164,6 +177,9 @@ class ReadHotfilm:
         while scan is None:
             data = self.get_data()
             if data is None:
+                # return whatever scan might be pending
+                scan = self.scan
+                self.scan = None
                 break
             when = data.index[0]
             if self.scan is None or self.scan.index[0] != when:
@@ -270,54 +286,95 @@ adj scan strt: %s
         td = frame.index[-1] - frame.index[-2]
         return td / dt.timedelta(microseconds=1)
 
-    def get_period(self, frame) -> dt.timedelta:
+    def get_period(self, frame: pd.DataFrame,
+                   scan: pd.DataFrame = None) -> dt.timedelta:
         """
-        Return the time period covered by this frame, which includes the
-        interval after the last point.
+        Return the time period covered by this frame and given scan, including
+        the interval after the last point.
         """
+        if scan is None:
+            scan = frame
         first = frame.index[0]
-        last = frame.index[-1]
+        last = scan.index[-1]
         interval = self.get_interval(frame)
         period = last - first + dt.timedelta(microseconds=interval)
         return period
 
-    def get_block(self):
+    def read_scans(self):
         """
-        Accumulate scans until there is a break, then return them.
+        Yield the minimum time period of scans and the following scans until
+        there is a break.
         """
-        frame = None
         self.adjust_time = 0
+        # accumulate scans in a list until the minimum period is reached.
+        minreached = False
+        scan_list = []
+        last_scan = None
+        # period tracks the length of the current block so far
+        period = dt.timedelta(seconds=0)
         while True:
-            scan = self.get_scan()
+            scan = self.next_scan
             if scan is None:
-                frame = self.frame
-                self.frame = None
-            else:
-                if self.frame is None:
-                    logger.info("starting scan block: %s",
-                                scan.index[0].isoformat())
-                    self.frame = scan
-                elif self.is_contiguous(self.frame, scan):
-                    self.frame = pd.concat([self.frame, scan])
-                    period = self.get_period(self.frame)
-                    if period >= dt.timedelta(seconds=self.maxblock):
-                        frame = self.frame
-                        self.frame = None
+                scan = self.get_scan()
+            self.next_scan = None
+            if scan is None:
+                # eof
+                pass
+            elif not scan_list and not minreached:
+                logger.info("starting scan block: %s",
+                            scan.index[0].isoformat())
+                scan_list.append(scan)
+                period += self.get_period(scan)
+            elif self.is_contiguous(last_scan, scan):
+                period += self.get_period(scan)
+                if period < dt.timedelta(seconds=self.maxblock):
+                    scan_list.append(scan)
                 else:
-                    frame = self.frame
-                    self.frame = scan
-            if frame is not None:
-                first = frame.index[0]
-                last = frame.index[-1]
-                period = self.get_period(frame)
-                if period < dt.timedelta(seconds=self.minblock):
+                    self.next_scan = scan
+            else:
+                # break here, but save scan to start next block
+                self.next_scan = scan
+
+            last_scan = scan_list[-1] if scan_list else None
+
+            if not minreached:
+                minblock = dt.timedelta(seconds=self.minblock)
+                minreached = (period >= minblock)
+                if minreached:
+                    logger.info("minimum block period %s reached at %s",
+                                minblock, last_scan.index[-1].isoformat())
+
+            if minreached and scan_list:
+                # flush the scan list
+                for onescan in scan_list:
+                    yield onescan
+                scan_list.clear()
+
+            if scan is None or self.next_scan is not None:
+                # a block is ending.  if there are still scans in the list,
+                # they were not enough to make a minimum block.  if there is a
+                # scan pending, then keep going with a new block.
+                if scan_list:
+                    first = scan_list[0].index[0]
+                    last = scan_list[-1].index[-1]
                     logger.error("block of scans is too short (%s), "
                                  "from %s to %s",
                                  period, first.isoformat(), last.isoformat())
-                    frame = None
-            if scan is None or frame is not None:
+                    scan_list.clear()
+                    if self.next_scan is not None:
+                        continue
                 break
-        return frame
+
+        return None
+
+    def get_block(self) -> pd.DataFrame:
+        """
+        Read a block of scans and return them as a single DataFrame.
+        """
+        scans = list(self.read_scans())
+        if scans:
+            return pd.concat(scans)
+        return None
 
     def parse_line(self, line):
         match = _prefix_rx.match(line)
@@ -355,27 +412,39 @@ adj scan strt: %s
             data = self.get_scan()
 
     def write_text_file(self, filespec: str):
+        # keep iterating over blocks of scans until an empty block is
+        # returned.
         while True:
-            data = self.get_block()
-            if data is None:
-                break
-            when = data.index[0]
-            path = when.strftime(filespec)
-            period = self.get_period(data)
-            logger.info("writing %g seconds to file %s",
-                        period.total_seconds(), path)
-            out = open(path, "w")
-            out.write("time")
-            for c in data.columns:
-                out.write(" %s" % (c))
-            out.write("\n")
+            out = None
+            header = None
+            last = None
+            for data in self.read_scans():
+                if header is None:
+                    header = data
+                    when = data.index[0]
+                    path = when.strftime(filespec)
+                    logger.info("writing to file: %s", path)
+                    out = open(path, "w")
+                    out.write("time")
+                    for c in data.columns:
+                        out.write(" %s" % (c))
+                    out.write("\n")
 
-            for i in range(0, len(data)):
-                out.write("%s" % (self.format_time(data.index[i])))
-                for c in data.columns:
-                    out.write(" %s" % (data[c][i]))
-                out.write("\n")
-            out.close()
+                for i in range(0, len(data)):
+                    out.write("%s" % (self.format_time(data.index[i])))
+                    for c in data.columns:
+                        out.write(" %s" % (data[c][i]))
+                    out.write("\n")
+
+                last = data
+
+            if out:
+                period = self.get_period(header, last)
+                logger.info("total time in file %s: %s", path, period)
+                out.close()
+
+            if header is None:
+                break
 
 
 def apply_args(hf: ReadHotfilm, argv: list[str] or None):
@@ -396,10 +465,12 @@ def apply_args(hf: ReadHotfilm, argv: list[str] or None):
                         "Useful for simulating real-time data when called "
                         "from the web plotting app with data files.",
                         default=0)
-    parser.add_argument("--min", type=int, default=30,
-                        help="Minimum minutes to write into a file. (30)")
-    parser.add_argument("--max", type=int, default=60,
-                        help="Maximum minutes to write into a file. (60)")
+    parser.add_argument("--min", type=int, default=hf.minblock//60,
+                        help="Minimum minutes to write into a file. (%s)" %
+                        (hf.minblock//60))
+    parser.add_argument("--max", type=int, default=hf.maxblock//60,
+                        help="Maximum minutes to write into a file. (%d)" %
+                        (hf.maxblock//60))
     parser.add_argument("--netcdf", help="Write data to named netcdf file")
     parser.add_argument("--text", help="Write data in text columns to file.  "
                         "Filenames can include time specifiers, "
@@ -589,3 +660,47 @@ def test_s_format():
     epoch = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
     assert hf.format_time(when) == "1691517997.000000"
     assert (when - epoch).total_seconds() == 1691517997
+
+
+_block_lines = """
+2023 07 20 01:02:03.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
+2023 07 20 01:02:04.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
+2023 07 20 01:02:05.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
+2023 07 20 01:02:13.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
+2023 07 20 01:02:14.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
+""".strip().splitlines()
+
+
+def test_get_block():
+    hf = ReadHotfilm()
+    hf.select_channels([1])
+    hf.minblock = 0
+    hf.line_iterator = iter(_block_lines)
+    logger.debug("first get_block() call...")
+    frame = hf.get_block()
+    assert len(frame.index) == 24
+    logger.debug("second get_block() call...")
+    frame = hf.get_block()
+    assert len(frame.index) == 16
+
+
+def test_short_blocks():
+    hf = ReadHotfilm()
+    hf.select_channels([1])
+    hf.line_iterator = iter(_block_lines)
+    logger.debug("first get_block() call...")
+    frame = hf.get_block()
+    assert frame is None
+
+
+def test_long_enough_blocks():
+    hf = ReadHotfilm()
+    hf.select_channels([1])
+    hf.minblock = 3
+    hf.line_iterator = iter(_block_lines)
+    logger.debug("first get_block() call...")
+    frame = hf.get_block()
+    assert len(frame.index) == 24
+    logger.debug("second get_block() call...")
+    frame = hf.get_block()
+    assert frame is None
