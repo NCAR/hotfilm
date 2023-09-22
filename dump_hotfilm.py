@@ -224,17 +224,6 @@ class ReadHotfilm:
                 name = data.columns[0]
                 logger.debug("adding %s to current scan at %s", name, when)
                 self.scan[name] = data[name]
-            if scan is None:
-                # no full scan to return yet
-                continue
-            # If there are any dummy values at all, then skip the entire
-            # frame.  If the labjack could not keep up and fill the entire
-            # scan, then the pps count also contained dummy values, in which
-            # case the computed timestamp is likely wrong too.
-            if self.skip_scan(scan):
-                logger.error("skipping scan with dummy values at %s",
-                             when.isoformat())
-                scan = None
         return scan
 
     def is_contiguous(self, frame: pd.DataFrame, scan: pd.DataFrame):
@@ -346,12 +335,22 @@ adj scan strt: %s
         period = dt.timedelta(seconds=0)
         while True:
             scan = self.next_scan
+            skipped = False
             if scan is None:
                 scan = self.get_scan()
             self.next_scan = None
             if scan is None:
                 # eof
                 pass
+            elif self.skip_scan(scan):
+                # If there are any dummy values at all, then skip the entire
+                # frame.  If the labjack could not keep up and fill the entire
+                # scan, then the pps count also contained dummy values, in
+                # which case the computed timestamp is likely wrong too.
+                logger.error("skipping scan with dummy values at %s",
+                             scan.index[0].isoformat())
+                scan = None
+                skipped = True
             elif not scan_list and not minreached:
                 logger.info("starting scan block: %s",
                             scan.index[0].isoformat())
@@ -384,8 +383,7 @@ adj scan strt: %s
 
             if scan is None or self.next_scan is not None:
                 # a block is ending.  if there are still scans in the list,
-                # they were not enough to make a minimum block.  if there is a
-                # scan pending, then keep going with a new block.
+                # they were not enough to make a minimum block.
                 if scan_list:
                     first = scan_list[0].index[0]
                     last = scan_list[-1].index[-1]
@@ -393,9 +391,12 @@ adj scan strt: %s
                                  "from %s to %s",
                                  period, first.isoformat(), last.isoformat())
                     scan_list.clear()
-                    if self.next_scan is not None:
-                        continue
-                break
+                # if a block of scans has already been returned, or else there
+                # is no chance of more blocks because no scan is pending and
+                # this one was not skipped, then return None to signal the end
+                # of this current block.
+                if minreached or (self.next_scan is None and not skipped):
+                    break
 
         return None
 
@@ -745,3 +746,29 @@ def test_long_enough_blocks():
     logger.debug("second get_block() call...")
     frame = hf.get_block()
     assert frame is None
+
+
+_skip_lines = """
+2023 07 20 01:02:03.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
+2023 07 20 01:02:04.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
+2023 07 20 01:02:05.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4000
+2023 07 20 01:02:06.0 200, 521   8000     2.4023     2.4384    -9999.0     2.2848     2.2601     2.3793     2.4415     2.4093
+2023 07 20 01:02:07.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.8000
+""".strip().splitlines()
+
+
+def test_skip_blocks():
+    hf = ReadHotfilm()
+    hf.select_channels([1])
+    hf.minblock = 1
+    hf.line_iterator = iter(_skip_lines)
+    logger.debug("first get_block() call...")
+    frame = hf.get_block()
+    # first block should break at the -9999
+    assert frame is not None and len(frame) == 24
+    assert frame['ch1'][23] == 2.4
+    logger.debug("second get_block() call...")
+    frame = hf.get_block()
+    # should still get a block with one scan
+    assert frame is not None and len(frame) == 8
+    assert frame['ch1'][7] == 2.8
