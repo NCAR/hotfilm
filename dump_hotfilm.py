@@ -279,7 +279,10 @@ adj scan strt: %s
         self.adjust_time -= shift
         if shift == 0:
             pass
-        elif abs(shift) > 1e6 + 2*interval:
+        elif abs(shift) > 2e6 + 2*interval:
+            # sometimes there are consecutive scans which get shifted even by
+            # two seconds, but we can be relatively confident they are
+            # contiguous if there are no dummy scans between them.
             logger.error("%d usec shift from %s to %s is too large",
                          shift, frame.index[-1].isoformat(), next.isoformat())
         elif abs(self.adjust_time) > 5e5:
