@@ -119,23 +119,13 @@ class ReadHotfilm:
         logger.debug("selected channels: %s",
                      ",".join(self.channels) if self.channels else "all")
 
-    def next_line(self):
-        "Return next line from line iterator, or None."
-        line = None
-        try:
-            if self.line_iterator:
-                line = next(self.line_iterator)
-        except StopIteration:
-            pass
-        return line
-
     def get_data(self):
         """
         Return the next selected channel as a DataFrame.
         """
         data = None
         while data is None:
-            line = self.next_line()
+            line = next(self.line_iterator, None)
             if not line:
                 break
             match = _prefix_rx.match(line)
