@@ -37,12 +37,62 @@ def datetime_from_match(match):
     return when
 
 
+class time_formatter:
+
+    ISO = "iso"
+    EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+    FLOAT_SECONDS = "%s.%f"
+
+    def __init__(self, timeformat: str, first: dt.datetime, interval: int):
+        self.timeformat = timeformat
+        self.first = first
+        self.interval = interval
+        self.formatter = None
+        self.base_usecs = None
+        self.i = 0
+        mformat = self.timeformat
+        if self.timeformat == self.ISO:
+            self.formatter = self.format_iso
+        elif mformat == self.FLOAT_SECONDS:
+            self.base_usecs = int((first - self.EPOCH).total_seconds()) * 1e6
+            self.base_usecs += first.microsecond
+            self.formatter = self.format_sf
+            self.i = 0
+        elif "%s" in mformat:
+            self.formatter = self.format_s
+        else:
+            self.formatter = self.format_strftime
+
+    def format_strftime(self, when):
+        return when.strftime(self.timeformat)
+
+    def format_s(self, when):
+        "Interpolate a time format which contains %s"
+        # The %s specifier to strftime does the wrong thing if TZ is not UTC.
+        # Rather than modify the environment just for this, interpolate %s
+        # explicitly here.
+        mformat = self.timeformat
+        seconds = int((when - self.EPOCH).total_seconds())
+        mformat = self.timeformat.replace("%s", str(seconds))
+        return when.strftime(mformat)
+
+    def format_iso(self, when):
+        return when.isoformat()
+
+    def format_sf(self, when):
+        "Interpolate %s%f time format by exploiting regular interval."
+        usecs = self.base_usecs + self.i * self.interval
+        self.i += 1
+        return "%d.%06d" % (usecs // 1e6, usecs % 1e6)
+
+    def __call__(self, when):
+        return self.formatter(when)
+
+
 class ReadHotfilm:
     """
     Read the hotfilm 1-second time series from data_dump.
     """
-    ISO = "iso"
-    EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
 
     adjust_time: int
 
@@ -61,7 +111,7 @@ class ReadHotfilm:
         # limit output to inside the begin and end times, if set
         self.begin = None
         self.end = None
-        self.timeformat = self.ISO
+        self.timeformat = time_formatter.FLOAT_SECONDS
         # minimum number of seconds required to consider a block good
         self.minblock = 15*60
         # maximum number of seconds to include in a block
@@ -78,7 +128,7 @@ class ReadHotfilm:
         the default.
         """
         if not fspec:
-            self.timeformat = self.ISO
+            self.timeformat = time_formatter.ISO
         else:
             self.timeformat = fspec
 
@@ -87,16 +137,8 @@ class ReadHotfilm:
         self.maxblock = mmax*60
 
     def format_time(self, when: dt.datetime):
-        # The %s specifier to strftime does the wrong thing if TZ is not UTC.
-        # Rather than modify the environment just for this, interpolate %s
-        # explicitly here.
-        if self.timeformat == self.ISO:
-            return when.isoformat()
-        mformat = self.timeformat
-        if "%s" in mformat:
-            seconds = int((when - self.EPOCH).total_seconds())
-            mformat = self.timeformat.replace("%s", str(seconds))
-        return when.strftime(mformat)
+        "Convenient shortcut, but not optimal."
+        return time_formatter(self.timeformat, when, 0)(when)
 
     def set_source(self, source):
         logger.info("setting sources: %s", ",".join(source))
@@ -408,20 +450,25 @@ adj scan strt: %s
             out = None
             header = None
             last = None
+            # Use the same time formatter for each block, to exploit regular
+            # interval to format time strings
+            tformat = None
             for data in self.read_scans():
                 if header is None:
                     header = data
                     when = data.index[0]
                     path = when.strftime(filespec)
+                    interval = self.get_interval(data)
+                    tformat = time_formatter(self.timeformat, when, interval)
                     logger.info("writing to file: %s", path)
-                    out = open(path, "w")
+                    out = open(path, "w", buffering=32*65536)
                     out.write("time")
                     for c in data.columns:
                         out.write(" %s" % (c))
                     out.write("\n")
 
                 for i in range(0, len(data)):
-                    out.write("%s" % (self.format_time(data.index[i])))
+                    out.write("%s" % (tformat(data.index[i])))
                     for c in data.columns:
                         out.write(" %s" % (data[c][i]))
                     out.write("\n")
@@ -467,7 +514,8 @@ def apply_args(hf: ReadHotfilm, argv: list[str] or None):
                         "like %%Y%%m%%d_%%H%%M%%S.")
     parser.add_argument("--timeformat",
                         help="Timestamp format, iso or %% spec pattern.  "
-                        "Use %%s.%%f for floating point seconds since epoch.")
+                        "Default is %%s.%%f, for "
+                        "floating point seconds since epoch.")
     parser.add_argument("--log", choices=['debug', 'info', 'error'],
                         default='info')
     args = parser.parse_args(argv)
@@ -637,6 +685,7 @@ def test_scan_skip():
 
 def test_time_format():
     hf = ReadHotfilm()
+    hf.timeformat = time_formatter.ISO
     when = dt.datetime(2023, 7, 23, 2, 3, 4, 765430, dt.timezone.utc)
     assert hf.format_time(when) == "2023-07-23T02:03:04.765430+00:00"
     hf.set_time_format("%H:%M:%S.%f")
@@ -650,6 +699,8 @@ def test_s_format():
     epoch = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
     assert hf.format_time(when) == "1691517997.000000"
     assert (when - epoch).total_seconds() == 1691517997
+    when = dt.datetime(2023, 8, 8, 18, 6, 37, 999999, tzinfo=dt.timezone.utc)
+    assert hf.format_time(when) == "1691517997.999999"
 
 
 _block_lines = """
