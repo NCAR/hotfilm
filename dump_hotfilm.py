@@ -317,7 +317,7 @@ adj scan strt: %s
                 period += self.get_period(scan)
             elif self.is_contiguous(last_scan, scan):
                 period += self.get_period(scan)
-                if period < dt.timedelta(seconds=self.maxblock):
+                if period <= dt.timedelta(seconds=self.maxblock):
                     scan_list.append(scan)
                 else:
                     self.next_scan = scan
