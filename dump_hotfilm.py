@@ -2,6 +2,8 @@
 
 import sys
 import subprocess as sp
+from pathlib import Path
+import tempfile
 import argparse
 import time
 import logging
@@ -113,7 +115,7 @@ class ReadHotfilm:
         self.end = None
         self.timeformat = time_formatter.FLOAT_SECONDS
         # minimum number of seconds required to consider a block good
-        self.minblock = 15*60
+        self.minblock = 1*60
         # maximum number of seconds to include in a block
         self.maxblock = 120*60
         # adjustment to successive sample times to line them up with previous
@@ -452,6 +454,8 @@ adj scan strt: %s
         # returned.
         while True:
             out = None
+            path = None
+            tfile = None
             header = None
             last = None
             # Use the same time formatter for each block, to exploit regular
@@ -461,11 +465,14 @@ adj scan strt: %s
                 if header is None:
                     header = data
                     when = data.index[0]
-                    path = when.strftime(filespec)
+                    path = Path(when.strftime(filespec))
+                    tfile = tempfile.NamedTemporaryFile(dir=str(path.parent),
+                                                        prefix=str(path)+'.',
+                                                        delete=False)
                     interval = self.get_interval(data)
                     tformat = time_formatter(self.timeformat, when, interval)
-                    logger.info("writing to file: %s", path)
-                    out = open(path, "w", buffering=32*65536)
+                    logger.info("writing to file: %s", tfile.name)
+                    out = open(tfile.name, "w", buffering=32*65536)
                     out.write("time")
                     for c in data.columns:
                         out.write(" %s" % (c))
@@ -480,9 +487,13 @@ adj scan strt: %s
                 last = data
 
             if out:
-                period = self.get_period(header, last)
-                logger.info("total time in file %s: %s", path, period)
                 out.close()
+                # insert the file length into the final filename
+                minutes = self.get_period(header, last).total_seconds() // 60
+                fpath = path.stem + ("_%03d" % (minutes)) + path.suffix
+                logger.info("file done with %d mins, renaming: %s",
+                            minutes, fpath)
+                fpath = Path(tfile.name).rename(fpath)
 
             if header is None:
                 break
