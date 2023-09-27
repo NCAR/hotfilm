@@ -128,7 +128,7 @@ class ReadHotfilm:
         the default.
         """
         if not fspec:
-            self.timeformat = time_formatter.ISO
+            self.timeformat = time_formatter.FLOAT_SECONDS
         else:
             self.timeformat = fspec
 
@@ -170,8 +170,7 @@ class ReadHotfilm:
             line = next(self.line_iterator, None)
             if not line:
                 break
-            match = _prefix_rx.match(line)
-            data = self.match_to_data(match, line)
+            data = self.parse_line(line)
             if data is None:
                 continue
             # If not yet into the selected range, skip it.
@@ -416,11 +415,8 @@ adj scan strt: %s
             return pd.concat(scans)
         return None
 
-    def parse_line(self, line):
-        match = _prefix_rx.match(line)
-        return self.match_to_data(match)
-
-    def match_to_data(self, match, line=None):
+    def parse_line(self, line) -> pd.DataFrame or None:
+        match = _prefix_rx.match(line) if line else None
         if not match:
             return None
         when = datetime_from_match(match)
@@ -493,8 +489,9 @@ adj scan strt: %s
 
 
 def apply_args(hf: ReadHotfilm, argv: list[str] or None):
-    parser = argparse.ArgumentParser()
-    parser.add_argument("source", nargs="+",
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument("input", nargs="+",
                         help="1 or more data files, or a sample "
                         "server specifier, like sock:t0t:31000.",
                         default=None)
@@ -511,25 +508,25 @@ def apply_args(hf: ReadHotfilm, argv: list[str] or None):
                         "from the web plotting app with data files.",
                         default=0)
     parser.add_argument("--min", type=int, default=hf.minblock//60,
-                        help="Minimum minutes to write into a file. (%s)" %
-                        (hf.minblock//60))
+                        help="Minimum minutes to write into a file.")
     parser.add_argument("--max", type=int, default=hf.maxblock//60,
-                        help="Maximum minutes to write into a file. (%d)" %
-                        (hf.maxblock//60))
+                        help="Maximum minutes to write into a file.")
     parser.add_argument("--netcdf", help="Write data to named netcdf file")
     parser.add_argument("--text", help="Write data in text columns to file.  "
                         "Filenames can include time specifiers, "
-                        "like %%Y%%m%%d_%%H%%M%%S.")
+                        "like %%Y%%m%%d_%%H%%M%%S.",
+                        default="hotfilm_%Y%m%d_%H%M%S.txt")
     parser.add_argument("--timeformat",
                         help="Timestamp format, iso or %% spec pattern.  "
-                        "Default is %%s.%%f, for "
-                        "floating point seconds since epoch.")
+                        "Use %%s.%%f for "
+                        "floating point seconds since epoch.",
+                        default=hf.timeformat)
     parser.add_argument("--log", choices=['debug', 'info', 'error'],
                         default='info')
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.getLevelName(args.log.upper()))
-    hf.set_source(args.source)
+    hf.set_source(args.input)
     if args.channels:
         hf.select_channels(args.channels)
     hf.set_min_max_block_minutes(args.min, args.max)
@@ -557,225 +554,3 @@ def main(argv: list[str] or None):
 
 if __name__ == "__main__":
     main(sys.argv[1:])
-
-
-def test_datetime_from_match():
-    tests = {
-        "2023 06 30 21:59:27.8075 200, 521    8000 1 2 3 4":
-        dt.datetime(2023, 6, 30, 21, 59, 27, 807500, dt.timezone.utc),
-        "2023 06 30 21:59:27 200, 521    8000 1 2 3 4":
-        dt.datetime(2023, 6, 30, 21, 59, 27, 0, dt.timezone.utc),
-        "2023 06 30 21:59:27.0 200, 521    8000 1 2 3 4":
-        dt.datetime(2023, 6, 30, 21, 59, 27, 0, dt.timezone.utc),
-        "2023 07 20 01:02:04.3950 200, 521   8000 1 2 3 4":
-        dt.datetime(2023, 7, 20, 1, 2, 4, 395000, dt.timezone.utc),
-        "2023 07 20 01:02:04.000002 200, 521   8000 1 2 3 4":
-        dt.datetime(2023, 7, 20, 1, 2, 4, 2, dt.timezone.utc)
-    }
-    for prefix, xwhen in tests.items():
-        m = _prefix_rx.match(prefix)
-        assert m
-        when = datetime_from_match(m)
-        assert when == xwhen
-
-
-_scan = """
-2023 07 20 01:02:03.3950 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
-""".strip()
-
-
-def test_parse_line():
-    hf = ReadHotfilm()
-    data = hf.parse_line(_scan)
-    assert data is not None
-    print(data)
-    y = data['ch1']
-    x = data.index
-    y2 = data[data.columns[0]]
-    assert (y == y2).all()
-    assert len(x) == 8
-    assert len(y) == 8
-    when: dt.datetime
-    when = x[0]
-    assert when.isoformat() == "2023-07-20T01:02:03.395000+00:00"
-    assert when.strftime("%Y%m%d_%H%M%S") == "20230720_010203"
-    assert x[-1] == when + (7 * dt.timedelta(microseconds=125000))
-    assert y[0] == 2.4023
-    assert y[-1] == 2.4093
-
-
-def test_get_period():
-    hf = ReadHotfilm()
-    data = hf.parse_line(_scan)
-    period = hf.get_period(data)
-    interval = hf.get_interval(data)
-    assert interval == 125000
-    assert period.total_seconds() == 1
-
-
-_line1 = """
-2023 07 20 01:02:03.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
-""".strip()
-
-_line2 = """
-2023 07 20 01:02:04.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
-""".strip()
-
-
-def check_and_append(hf: ReadHotfilm, data: pd.DataFrame, next: pd.DataFrame,
-                     xcont: bool, xadjust: int):
-    """
-    Test data and next for contiguousness and match result against xcont.  If
-    contiguous, append next, verify interval spacing, and match next xadjust.
-    """
-    logger.debug("checking next scan %s contiguous: [%s, %s]",
-                 "is" if xcont else "is NOT",
-                 next.index[0].isoformat(),
-                 next.index[-1].isoformat())
-    assert hf.is_contiguous(data, next) == xcont
-    if xcont:
-        data = pd.concat([data, next])
-        logger.debug("after appending next, data frame is: [%s, %s]",
-                     data.index[0].isoformat(), data.index[-1].isoformat())
-        interval = dt.timedelta(microseconds=125000)
-        for i in range(1, len(data.index)):
-            assert data.index[i] - data.index[i-1] == interval
-        assert hf.adjust_time == xadjust
-    return data
-
-
-def test_is_contiguous():
-    hf = ReadHotfilm()
-    data = hf.parse_line(_line1)
-    xfirst = dt.datetime(2023, 7, 20, 1, 2, 3, 0, dt.timezone.utc)
-    assert data.index[0] == xfirst
-    # after the first scan adjust should still be zero.
-    assert hf.adjust_time == 0
-    next = hf.parse_line(_line2)
-    xfirst = dt.datetime(2023, 7, 20, 1, 2, 4, 0, dt.timezone.utc)
-    assert next.index[0] == xfirst
-    assert hf.adjust_time == 0
-    logger.debug("test next follows at exactly the right time")
-    data = check_and_append(hf, data, next, True, 0)
-    logger.debug("next is shifted ahead by 2 intervals")
-    interval = dt.timedelta(microseconds=125000)
-    next.index += 2*interval + dt.timedelta(seconds=1)
-    # still contiguous, but next is shifted back
-    xadjust = -2*interval / dt.timedelta(microseconds=1)
-    data = check_and_append(hf, data, next, True, xadjust)
-    # if the next scan is exactly a second later, then that is like shifting 2
-    # intervals relative to the previous scan, and the overall adjustment from
-    # the first scan is back to 0.
-    logger.debug("next follows 1 second later, shift is -250000")
-    next.index += dt.timedelta(seconds=1)
-    xadjust = 0
-    data = check_and_append(hf, data, next, True, xadjust)
-    logger.debug("next is 100 usec earlier, shift should be -100")
-    next.index += dt.timedelta(microseconds=999900)
-    xadjust += 100
-    data = check_and_append(hf, data, next, True, xadjust)
-    # finally, test that too large a shift triggers a reset
-    next.index += dt.timedelta(seconds=2)
-    data = check_and_append(hf, data, next, False, xadjust)
-
-
-_scanfill = """
-2023 07 20 00:00:00.0395 200, 521   8000     2.4023     2.4384     -9999.0     2.2848     2.2601     2.3793     2.4415     2.4093
-""".strip()
-
-
-def test_scan_skip():
-    hf = ReadHotfilm()
-    data = hf.parse_line(_scanfill)
-    assert data is not None
-    assert hf.skip_scan(data)
-
-
-def test_time_format():
-    hf = ReadHotfilm()
-    hf.timeformat = time_formatter.ISO
-    when = dt.datetime(2023, 7, 23, 2, 3, 4, 765430, dt.timezone.utc)
-    assert hf.format_time(when) == "2023-07-23T02:03:04.765430+00:00"
-    hf.set_time_format("%H:%M:%S.%f")
-    assert hf.format_time(when) == "02:03:04.765430"
-
-
-def test_s_format():
-    hf = ReadHotfilm()
-    hf.timeformat = "%s.%f"
-    when = dt.datetime(2023, 8, 8, 18, 6, 37, 0, tzinfo=dt.timezone.utc)
-    epoch = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
-    assert hf.format_time(when) == "1691517997.000000"
-    assert (when - epoch).total_seconds() == 1691517997
-    when = dt.datetime(2023, 8, 8, 18, 6, 37, 999999, tzinfo=dt.timezone.utc)
-    assert hf.format_time(when) == "1691517997.999999"
-
-
-_block_lines = """
-2023 07 20 01:02:03.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
-2023 07 20 01:02:04.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
-2023 07 20 01:02:05.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
-2023 07 20 01:02:13.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
-2023 07 20 01:02:14.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
-""".strip().splitlines()
-
-
-def test_get_block():
-    hf = ReadHotfilm()
-    hf.select_channels([1])
-    hf.minblock = 0
-    hf.line_iterator = iter(_block_lines)
-    logger.debug("first get_block() call...")
-    frame = hf.get_block()
-    assert len(frame.index) == 24
-    logger.debug("second get_block() call...")
-    frame = hf.get_block()
-    assert len(frame.index) == 16
-
-
-def test_short_blocks():
-    hf = ReadHotfilm()
-    hf.select_channels([1])
-    hf.line_iterator = iter(_block_lines)
-    logger.debug("first get_block() call...")
-    frame = hf.get_block()
-    assert frame is None
-
-
-def test_long_enough_blocks():
-    hf = ReadHotfilm()
-    hf.select_channels([1])
-    hf.minblock = 3
-    hf.line_iterator = iter(_block_lines)
-    logger.debug("first get_block() call...")
-    frame = hf.get_block()
-    assert len(frame.index) == 24
-    logger.debug("second get_block() call...")
-    frame = hf.get_block()
-    assert frame is None
-
-
-_skip_lines = """
-2023 07 20 01:02:03.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
-2023 07 20 01:02:04.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
-2023 07 20 01:02:05.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4000
-2023 07 20 01:02:06.0 200, 521   8000     2.4023     2.4384    -9999.0     2.2848     2.2601     2.3793     2.4415     2.4093
-2023 07 20 01:02:07.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.8000
-""".strip().splitlines()
-
-
-def test_skip_blocks():
-    hf = ReadHotfilm()
-    hf.select_channels([1])
-    hf.minblock = 1
-    hf.line_iterator = iter(_skip_lines)
-    logger.debug("first get_block() call...")
-    frame = hf.get_block()
-    # first block should break at the -9999
-    assert frame is not None and len(frame) == 24
-    assert frame['ch1'][23] == 2.4
-    logger.debug("second get_block() call...")
-    frame = hf.get_block()
-    # should still get a block with one scan
-    assert frame is not None and len(frame) == 8
-    assert frame['ch1'][7] == 2.8
