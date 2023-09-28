@@ -403,8 +403,9 @@ adj scan strt: %s
                 if minreached or (self.next_scan is None and not skipped):
                     break
 
-                # reset the time adjustment for the next block
+                # reset the time adjustment and period for the next block
                 self.adjust_time = 0
+                period = dt.timedelta(seconds=0)
 
         return None
 

@@ -233,3 +233,16 @@ def test_skip_blocks():
     # should still get a block with one scan
     assert frame is not None and len(frame) == 8
     assert frame['ch1'][7] == 2.8
+
+
+def test_get_minutes():
+    # 20230801_164743
+    begin = dt.datetime(2023, 8, 1, 16, 47, 43, microsecond=900000)
+    next = dt.datetime(2023, 8, 1, 16, 47, 43, microsecond=900500)
+    end = dt.datetime(2023, 8, 1, 16, 48, 43, microsecond=899500)
+    interval = (next - begin) / dt.timedelta(microseconds=1)
+    assert interval == 500
+    period = end - begin + dt.timedelta(microseconds=500)
+    seconds = period.total_seconds()
+    assert seconds == 60.0
+    assert seconds // 60 == 1
