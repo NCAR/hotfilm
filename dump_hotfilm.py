@@ -12,6 +12,9 @@ import datetime as dt
 import pandas as pd
 import numpy as np
 
+from typing import Union
+from typing import Optional, List
+
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +126,7 @@ class ReadHotfilm:
         self.adjust_time = 0
         # iterator which returns the next data line
         self.line_iterator = None
+        self.precision = 8
 
     def set_time_format(self, fspec):
         """
@@ -147,7 +151,8 @@ class ReadHotfilm:
         self.source = source
 
     def _make_cmd(self):
-        self.cmd = ["data_dump", "--nodeltat", "-i", "-1,520-523"]
+        self.cmd = ["data_dump", "--precision", str(self.precision),
+                    "--nodeltat", "-i", "-1,520-523"]
         self.cmd += self.source
 
     def start(self):
@@ -158,7 +163,7 @@ class ReadHotfilm:
         self.dd = sp.Popen(self.cmd, stdout=sp.PIPE, text=True)
         self.line_iterator = self.dd.stdout
 
-    def select_channels(self, channels: list[int] or None):
+    def select_channels(self, channels: Union[list[int], None]):
         self.channels = [f"ch{ch}" for ch in channels] if channels else None
         logger.debug("selected channels: %s",
                      ",".join(self.channels) if self.channels else "all")
@@ -418,7 +423,7 @@ adj scan strt: %s
             return pd.concat(scans)
         return None
 
-    def parse_line(self, line) -> pd.DataFrame or None:
+    def parse_line(self, line) -> Union[pd.DataFrame, None]:
         match = _prefix_rx.match(line) if line else None
         if not match:
             return None
@@ -479,10 +484,13 @@ adj scan strt: %s
                         out.write(" %s" % (c))
                     out.write("\n")
 
+                # need precision-1 decimal places since precision includes the
+                # integer digit of voltage.
+                fmt = f" %.{self.precision-1}f"
                 for i in range(0, len(data)):
                     out.write("%s" % (tformat(data.index[i])))
                     for c in data.columns:
-                        out.write(" %s" % (data[c][i]))
+                        out.write(fmt % (data[c].iloc[i]))
                     out.write("\n")
 
                 last = data
@@ -500,7 +508,7 @@ adj scan strt: %s
                 break
 
 
-def apply_args(hf: ReadHotfilm, argv: list[str] or None):
+def apply_args(hf: ReadHotfilm, argv: Optional[List[str]]):
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("input", nargs="+",
@@ -552,7 +560,7 @@ def apply_args(hf: ReadHotfilm, argv: list[str] or None):
     return args
 
 
-def main(argv: list[str] or None):
+def main(argv: Optional[List[str]]):
     hf = ReadHotfilm()
     args = apply_args(hf, argv)
     hf.start()

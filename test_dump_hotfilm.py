@@ -32,7 +32,7 @@ def test_datetime_from_match():
         assert data is not None
         assert data.index[0] == xwhen
 
-
+# flake8: noqa: E501
 _scan = """
 2023 07 20 01:02:03.3950 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
 """.strip()
@@ -54,8 +54,8 @@ def test_parse_line():
     assert when.isoformat() == "2023-07-20T01:02:03.395000+00:00"
     assert when.strftime("%Y%m%d_%H%M%S") == "20230720_010203"
     assert x[-1] == when + (7 * dt.timedelta(microseconds=125000))
-    assert y[0] == 2.4023
-    assert y[-1] == 2.4093
+    assert y.iloc[0] == 2.4023
+    assert y.iloc[-1] == 2.4093
 
 
 def test_get_period():
@@ -227,12 +227,12 @@ def test_skip_blocks():
     frame = hf.get_block()
     # first block should break at the -9999
     assert frame is not None and len(frame) == 24
-    assert frame['ch1'][23] == 2.4
+    assert frame['ch1'].iloc[23] == 2.4
     logger.debug("second get_block() call...")
     frame = hf.get_block()
     # should still get a block with one scan
     assert frame is not None and len(frame) == 8
-    assert frame['ch1'][7] == 2.8
+    assert frame['ch1'].iloc[7] == 2.8
 
 
 def test_get_minutes():
