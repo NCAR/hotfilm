@@ -11,8 +11,10 @@ import re
 import datetime as dt
 import pandas as pd
 import numpy as np
+import xarray as xr
 
-from typing import Union
+
+from typing import Generator, Union
 from typing import Optional, List
 
 
@@ -92,6 +94,43 @@ class time_formatter:
 
     def __call__(self, when):
         return self.formatter(when)
+
+
+class OutputPath:
+
+    def __init__(self):
+        self.when = None
+        self.path = None
+        self.tfile = None
+
+    def start(self, filespec: str, data: pd.DataFrame):
+        when = data.index[0]
+        path = Path(when.strftime(filespec))
+        tfile = tempfile.NamedTemporaryFile(dir=str(path.parent),
+                                            prefix=str(path)+'.',
+                                            delete=False)
+        logger.info("starting file: %s", tfile.name)
+        self.when = when
+        self.path = path
+        self.tfile = tfile
+        return tfile
+
+    def finish(self, minutes: int):
+        path = self.path
+        fpath = path.stem + ("_%03d" % (minutes)) + path.suffix
+        logger.info("file finished with %d mins, renaming: %s",
+                    minutes, fpath)
+        fpath = Path(self.tfile.name).rename(fpath)
+        self.tfile = None
+        self.path = None
+        self.when = None
+
+
+def iso_to_datetime(iso: str) -> dt.datetime:
+    """
+    Convert an ISO formatted string to a datetime object with UTC timezone.
+    """
+    return dt.datetime.fromisoformat(iso).replace(tzinfo=dt.timezone.utc)
 
 
 class ReadHotfilm:
@@ -330,7 +369,7 @@ adj scan strt: %s
         period = last - first + dt.timedelta(microseconds=interval)
         return period
 
-    def read_scans(self):
+    def read_scans(self) -> Generator[pd.DataFrame, None, None]:
         """
         Yield the minimum time period of scans and the following scans until
         there is a break.
@@ -459,8 +498,8 @@ adj scan strt: %s
         # keep iterating over blocks of scans until an empty block is
         # returned.
         while True:
+            outpath = OutputPath()
             out = None
-            path = None
             tfile = None
             header = None
             last = None
@@ -470,14 +509,10 @@ adj scan strt: %s
             for data in self.read_scans():
                 if header is None:
                     header = data
-                    when = data.index[0]
-                    path = Path(when.strftime(filespec))
-                    tfile = tempfile.NamedTemporaryFile(dir=str(path.parent),
-                                                        prefix=str(path)+'.',
-                                                        delete=False)
                     interval = self.get_interval(data)
+                    when = data.index[0]
                     tformat = time_formatter(self.timeformat, when, interval)
-                    logger.info("writing to file: %s", tfile.name)
+                    tfile = outpath.start(filespec, data)
                     out = open(tfile.name, "w", buffering=32*65536)
                     out.write("time")
                     for c in data.columns:
@@ -499,10 +534,53 @@ adj scan strt: %s
                 out.close()
                 # insert the file length into the final filename
                 minutes = self.get_period(header, last).total_seconds() // 60
-                fpath = path.stem + ("_%03d" % (minutes)) + path.suffix
-                logger.info("file done with %d mins, renaming: %s",
-                            minutes, fpath)
-                fpath = Path(tfile.name).rename(fpath)
+                outpath.finish(minutes)
+
+            if header is None:
+                break
+
+    def write_netcdf_file(self, filespec: str):
+        """
+        Like write_text_file(), but write to a netcdf file.  Create a time
+        coordinate variable using microseconds since the first time, and
+        create variables for each channel.
+        """
+        while True:
+            outpath = OutputPath()
+            tfile = None
+            header = None
+            last = None
+            datasets = []
+            when: dt.datetime = None
+            base: dt.datetime = None
+            # create a Dataset for each block, then concatenate them to write
+            # them to a netcdf file.
+            for data in self.read_scans():
+                if header is None:
+                    header = data
+                    when = data.index[0]
+                    base = when.replace(microsecond=0)
+                    units = ('microseconds since %s' %
+                             base.strftime("%Y-%m-%d %H:%M:%S+00:00"))
+                    tfile = outpath.start(filespec, data)
+                ds = xr.Dataset()
+                # numerous and varied attempts failed to get xarray to encode
+                # the time as microseconds since base, so do it manually.
+                ctime = (data.index - base).total_seconds() * 1e6
+                ds.coords['time'] = [int(t) for t in ctime]
+                ds['time'].attrs['units'] = units
+                ds['time'].encoding = {'dtype': 'int64'}
+                for c in data.columns:
+                    ds[c] = ('time', data[c])
+                datasets.append(ds)
+                last = data
+
+            if tfile:
+                ds = xr.concat(datasets, dim='time')
+                ds.to_netcdf(tfile.name)
+                # insert the file length into the final filename
+                minutes = self.get_period(header, last).total_seconds() // 60
+                outpath.finish(minutes)
 
             if header is None:
                 break
@@ -551,9 +629,9 @@ def apply_args(hf: ReadHotfilm, argv: Optional[List[str]]):
         hf.select_channels(args.channels)
     hf.set_min_max_block_minutes(args.min, args.max)
     if args.begin:
-        hf.begin = dt.datetime.fromisoformat(args.begin)
+        hf.begin = iso_to_datetime(args.begin)
     if args.end:
-        hf.end = dt.datetime.fromisoformat(args.end)
+        hf.end = iso_to_datetime(args.end)
 
     hf.set_time_format(args.timeformat)
     hf.delay = args.delay
@@ -564,10 +642,11 @@ def main(argv: Optional[List[str]]):
     hf = ReadHotfilm()
     args = apply_args(hf, argv)
     hf.start()
-    if args.text:
+    # netcdf takes precedence over text default
+    if args.netcdf:
+        hf.write_netcdf_file(args.netcdf)
+    elif args.text:
         hf.write_text_file(args.text)
-    elif args.netcdf:
-        pass
     else:
         hf.write_text(sys.stdout)
 
