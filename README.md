@@ -161,6 +161,14 @@ Then browse to url `http://192.168.1.10:5006/`.
 The browser app can plot one of the four channels in either the time or
 frequency domain, for each second of data output as a sample.
 
+Real-time data can be simulated by passing raw data files as arguments to
+`dump_hotfilm.py`, along with the `--delay` argument to insert pauses between
+scans:
+
+```plain
+bokeh serve --show app_hotfilm.py --args hotfilm_20230908_100000.dat --delay 1
+```
+
 This is a typical web plot for M2HATS:
 
 ![Typical web plot](hotfilm_20230808_171339.png)
