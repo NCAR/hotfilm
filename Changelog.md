@@ -2,6 +2,20 @@
 
 ## [unreleased] - Pending changes
 
+Raw data dumps can now write text csv or netcdf, for either 2K or 4K data.
+There is an algorithm which tries to detect contiguous blocks of data, then
+adjusts the timestamps of subsequent blocks to match the sampling rate, to
+account for clock drift between the ADC clock and GPS.  New output files are
+started when there is missing data (meaning GPS sync was lost or a buffer
+overrun occurred) or clock drift gets too large.
+
+Use the new `--precision` flag to `data_dump` to print data values with full
+precision.  `dump_hotfilm.py` must be run with the nidas
+[buster](https://github.com/NCAR/nidas/tree/buster) branch, since
+`--precision` only exists on that branch.
+
+## [1.2] - 2023-09-07
+
 In support of 4K sampling, constrain the scan rate option to divide evenly
 into 1e6 microseconds and be divisible by the allowed read rates.  The read
 rate can be 1, 2, or 4 reads per second, in case modifiying the size of each
@@ -46,6 +60,7 @@ latency.  Timestamp synchronization seems to work reliably, but might need
 improvement.
 
 <!-- Versions -->
-[unreleased]: https://github.com/NCAR/hotfilm/compare/v1.1...HEAD
+[unreleased]: https://github.com/NCAR/hotfilm/compare/v1.2...HEAD
+[1.2]: https://github.com/NCAR/hotfilm/releases/tag/v1.2
 [1.1]: https://github.com/NCAR/hotfilm/releases/tag/v1.1
 [1.0]: https://github.com/NCAR/hotfilm/releases/tag/v1.0
