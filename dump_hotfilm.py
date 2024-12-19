@@ -572,6 +572,7 @@ adj scan strt: %s
                 ds['time'].encoding = {'dtype': 'int64'}
                 for c in data.columns:
                     ds[c] = ('time', data[c])
+                    ds[c].attrs['units'] = 'V'
                 datasets.append(ds)
                 last = data
 
