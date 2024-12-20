@@ -338,15 +338,6 @@ adjusted with command-line arguments.
 
 The text files can be compressed afterwards.
 
-## Todo
-
-The diagnostic samples can be viewed in real-time using the tips above, but
-they are not yet available through a DSM dashboard.  The diagnostics could be
-relayed as UDP packets to another DSM instance, which then includes those
-variables in the dashboard.  Or `hotfilm` could run on its own DSM with its
-own dashboard, and the `json_data_stats` service could be configured to dump
-only the diagnostic samples.
-
 ## Implementation Notes
 
 The `hotfilm` program runs similarly to the NIDAS `dsm` process.  However,
@@ -493,6 +484,11 @@ somewhat regular intervals.  Here is an example:
 The interference does not seem to happen without the waveform generator
 connected, regardless of the LabJack power source.  Or so we hope.
 
+### 4 KHz Sampling
+
+See [Sampling4K.md](Sampling4K.md) for notes on the switch from 2K to 4K
+sampling.
+
 ## Example Data
 
 ### sawtooth.dat
@@ -510,3 +506,12 @@ LabJack was powered by the USB port on the waveform generator.
 
 The hot wire was blown on several times and then fanned it with a flat box
 lid.
+
+## Todo
+
+The diagnostic samples can be viewed in real-time using the tips above, but
+they are not yet available through a DSM dashboard.  The diagnostics could be
+relayed as UDP packets to another DSM instance, which then includes those
+variables in the dashboard.  Or `hotfilm` could run on its own DSM with its
+own dashboard, and the `json_data_stats` service could be configured to dump
+only the diagnostic samples.
