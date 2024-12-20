@@ -6,9 +6,12 @@ to disk in NIDAS dat archive format.
 
 Links:
 
-- [Installation](Install.md)
 - [Changelog](Changelog.md)
-- [LabJack U6](LabJackU6.md)
+- [Processing](Processing.md): Process hot film data and write to text or
+  netcdf.
+- [Installation](Install.md): Install the LabJack T7 hardware and hotfilm
+  software dependencies.
+- [LabJack U6](LabJackU6.md): Notes on the older LabJack U6.
 
 ## Running
 
@@ -317,26 +320,6 @@ The web plots look like this:
 
 A shorting cap can be plugged into the BNC inputs on the LabJack D37 board, in
 which case the voltage on that channel should be close to zero and steady.
-
-## Exporting hotfilm data
-
-The script [dump_hotfilm.py](dump_hotfilm.py) can translate NIDAS archive
-files into a column text format using `data_dump`.  Run `dump_hotfilm.py -h`
-to see usage.
-
-This is the command used to export data for M2HATS on `ustar`.  The text files
-have two columns, first column is floating point seconds since the epoch, and
-the second column is channel 1, ie, the hotfilm at the 1m sonic.
-
-```plain
-dump_hotfilm.py --log info --channel 1 --timeformat %s.%f --text text_%Y%m%d_%H%M%S.epoch.txt /data/isfs/projects/M2HATS/raw_data/
-```
-
-The script creates output files of uninterrupted, contiguous scans, by default
-at least 30 minutes and no more than 4 hours.  The min and max limits can be
-adjusted with command-line arguments.
-
-The text files can be compressed afterwards.
 
 ## Implementation Notes
 
