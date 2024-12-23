@@ -8,6 +8,7 @@ import pandas as pd
 
 from dump_hotfilm import ReadHotfilm
 from dump_hotfilm import time_formatter
+from dump_hotfilm import td_to_microseconds
 
 
 logger = logging.getLogger(__name__)
@@ -246,3 +247,25 @@ def test_get_minutes():
     seconds = period.total_seconds()
     assert seconds == 60.0
     assert seconds // 60 == 1
+
+
+def test_td_to_microseconds():
+    day = 24*60*60*1000000
+    tests = {
+        dt.timedelta(microseconds=0): 0,
+        dt.timedelta(microseconds=1): 1,
+        dt.timedelta(microseconds=999): 999,
+        dt.timedelta(microseconds=1000): 1000,
+        dt.timedelta(microseconds=1001): 1001,
+        dt.timedelta(days=1): day,
+        dt.timedelta(days=1, seconds=2, microseconds=1001): day + 2001001,
+        dt.timedelta(microseconds=999999): 999999,
+        dt.timedelta(microseconds=1000000): 1000000,
+        dt.timedelta(microseconds=1000001): 1000001,
+        dt.timedelta(microseconds=999999999): 999999999,
+        dt.timedelta(microseconds=1000000000): 1000000000,
+        dt.timedelta(microseconds=1000000001): 1000000001
+    }
+    for td, xusec in tests.items():
+        assert td_to_microseconds(td) == xusec
+        assert isinstance(td_to_microseconds(td), int)

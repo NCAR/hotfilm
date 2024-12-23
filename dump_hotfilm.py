@@ -44,6 +44,16 @@ def datetime_from_match(match):
     return when
 
 
+_microseconds_per_seconds = 1000000
+_microseconds_per_day = 24*60*60*_microseconds_per_seconds
+
+
+def td_to_microseconds(td: dt.timedelta) -> int:
+    return (td.days * _microseconds_per_day +
+            td.seconds * _microseconds_per_seconds +
+            td.microseconds)
+
+
 class time_formatter:
 
     ISO = "iso"
@@ -566,8 +576,7 @@ adj scan strt: %s
                 ds = xr.Dataset()
                 # numerous and varied attempts failed to get xarray to encode
                 # the time as microseconds since base, so do it manually.
-                ctime = (data.index - base).total_seconds() * 1e6
-                ds.coords['time'] = [int(t) for t in ctime]
+                ds.coords['time'] = (data.index - base).map(td_to_microseconds)
                 ds['time'].attrs['units'] = units
                 ds['time'].encoding = {'dtype': 'int64'}
                 for c in data.columns:
