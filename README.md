@@ -13,6 +13,11 @@ Links:
   software dependencies.
 - [LabJack U6](LabJackU6.md): Notes on the older LabJack U6.
 
+Specific information on the hot films deployed for the M2HATS project can be
+found on the [hot films](https://wiki.ucar.edu/display/M2HATSISFS/hot+films)
+wiki page on the [M2HATS Logbook
+Wiki](https://wiki.ucar.edu/display/M2HATSISFS/).
+
 ## Running
 
 ### Systemd service
