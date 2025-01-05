@@ -43,7 +43,7 @@ def test_parse_line():
     hf = ReadHotfilm()
     data = hf.parse_line(_scan)
     assert data is not None
-    print(data)
+    logger.debug(data)
     y = data['ch1']
     x = data.index
     y2 = data[data.columns[0]]
