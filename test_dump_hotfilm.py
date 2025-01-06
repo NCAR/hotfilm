@@ -2,14 +2,17 @@
 Tests for ReadHotfilm
 """
 
+import subprocess as sp
+from pathlib import Path
 import logging
 import datetime as dt
 import pandas as pd
+import pytest
 
 from dump_hotfilm import ReadHotfilm
 from dump_hotfilm import time_formatter
 from dump_hotfilm import td_to_microseconds
-
+from dump_hotfilm import main
 
 logger = logging.getLogger(__name__)
 
@@ -269,3 +272,31 @@ def test_td_to_microseconds():
     for td, xusec in tests.items():
         assert td_to_microseconds(td) == xusec
         assert isinstance(td_to_microseconds(td), int)
+
+
+_this_dir = Path(__file__).parent
+_test_data_dir = _this_dir / "test_data"
+_test_out_dir = _this_dir / "test_out"
+
+def test_netcdf_output():
+    datfile = _test_data_dir / "channel2_20230804_180000_05.dat"
+    _test_out_dir.mkdir(exist_ok=True)
+    xout = _test_out_dir / "channel2_20230804_180000_005.nc"
+    xout.unlink(missing_ok=True)
+    args = ["--netcdf", _test_out_dir / "channel2_%Y%m%d_%H%M%S.nc",
+            "--channel", "2", datfile]
+    args = [str(arg) for arg in args]
+    logger.debug("dumping: %s", " ".join(args))
+    main(args)
+    assert xout.exists() and xout.stat().st_size > 0
+    # hardcode for now, but might need to be configurable.  it should also be
+    # feasible to just open both files with xarray and compare the datasets.
+    nc_compare = Path("/opt/local/bin/nc_compare")
+    if not nc_compare.exists():
+        pytest.xfail(f"{nc_compare} not found")
+    xbase = _this_dir / "baseline" / "channel2_20230804_180000_005.nc"
+    args = [nc_compare, xbase, xout,
+            "--showindex", "--showtimes", "--nans-equal", "--showequal"]
+    args = [str(arg) for arg in args]
+    logger.debug("comparing: %s", " ".join(args))
+    assert sp.check_call(args) == 0

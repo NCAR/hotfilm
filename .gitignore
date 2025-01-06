@@ -6,3 +6,4 @@ test_t7
 hotfilm*.dat
 hotfilm
 hotfilm.o
+test_out/
