@@ -128,6 +128,7 @@ class OutputPath:
     def finish(self, minutes: int):
         path = self.path
         fpath = path.stem + ("_%03d" % (minutes)) + path.suffix
+        fpath = Path(self.tfile.name).parent / fpath
         logger.info("file finished with %d mins, renaming: %s",
                     minutes, fpath)
         fpath = Path(self.tfile.name).rename(fpath)
