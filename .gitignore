@@ -7,3 +7,5 @@ hotfilm*.dat
 hotfilm
 hotfilm.o
 test_out/
+.ipynb_checkpoints/
+.vscode/
