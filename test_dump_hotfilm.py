@@ -287,7 +287,12 @@ def test_netcdf_output():
             "--channel", "2", datfile]
     args = [str(arg) for arg in args]
     logger.debug("dumping: %s", " ".join(args))
-    main(args)
+    try:
+        main(args)
+    except FileNotFoundError as fe:
+        if fe.filename == "data_dump":
+            pytest.xfail("data_dump not found.")
+        raise
     assert xout.exists() and xout.stat().st_size > 0
     # make sure we get permissions ugo=r also
     assert xout.stat().st_mode & 0o444 == 0o444
