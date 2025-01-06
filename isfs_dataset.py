@@ -23,7 +23,7 @@ def rdatetime(when: np.datetime64, period: np.timedelta64) -> np.datetime64:
     return np.datetime64(when_ns, 'ns').astype(when.dtype)
 
 
-class ISFSDataset:
+class IsfsDataset:
 
     def __init__(self):
         self.dataset = None

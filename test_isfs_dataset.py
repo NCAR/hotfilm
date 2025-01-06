@@ -2,7 +2,7 @@
 from pytest import approx
 import logging
 import numpy as np
-from read_winds import ISFSDataset, rdatetime
+from isfs_dataset import IsfsDataset, rdatetime
 
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ def test_rdatetime():
 
 
 def test_read_winds():
-    ids = ISFSDataset().open("test_data/u_2m_t0_20230804_160000.nc")
+    ids = IsfsDataset().open("test_data/u_2m_t0_20230804_160000.nc")
     ds = ids.dataset
     u = ids.get_variable("u_2m_t0")
     first = ds.time[0]
