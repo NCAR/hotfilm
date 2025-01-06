@@ -132,6 +132,8 @@ class OutputPath:
         logger.info("file finished with %d mins, renaming: %s",
                     minutes, fpath)
         fpath = Path(self.tfile.name).rename(fpath)
+        # the files should not need to be writable
+        fpath.chmod(0o444)
         self.tfile = None
         self.path = None
         self.when = None

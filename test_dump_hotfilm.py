@@ -289,6 +289,8 @@ def test_netcdf_output():
     logger.debug("dumping: %s", " ".join(args))
     main(args)
     assert xout.exists() and xout.stat().st_size > 0
+    # make sure we get permissions ugo=r also
+    assert xout.stat().st_mode & 0o444 == 0o444
     # hardcode for now, but might need to be configurable.  it should also be
     # feasible to just open both files with xarray and compare the datasets.
     nc_compare = Path("/opt/local/bin/nc_compare")
