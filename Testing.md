@@ -36,3 +36,10 @@ The baseline netcdf output is then created with `dump_hotfilm.py`:
 
 Testing only one channel and 5 minutes saves space in the repository and also
 saves time running the tests.
+
+The netcdf input test data is reduced by selecting specific variables with
+`ncks`:
+
+```sh
+ncks -v u_2m_t0,time isfs_m2hats_qc_geo_tiltcor_hr_20230804_160000.nc u_2m_t0_20230804_160000.nc
+```
