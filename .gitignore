@@ -1,11 +1,2 @@
-.sconsign.dblite
-config.log
-config.py
-test_t7
-.sconf_temp
-hotfilm*.dat
-hotfilm
-hotfilm.o
-test_out/
 .ipynb_checkpoints/
 .vscode/
