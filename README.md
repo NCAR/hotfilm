@@ -7,11 +7,11 @@ to disk in NIDAS dat archive format.
 Links:
 
 - [Changelog](Changelog.md)
-- [Processing](Processing.md): Process hot film data and write to text or
+- [Processing](docs/Processing.md): Process hot film data and write to text or
   netcdf.
 - [Installation](Install.md): Install the LabJack T7 hardware and hotfilm
   software dependencies.
-- [LabJack U6](LabJackU6.md): Notes on the older LabJack U6.
+- [LabJack U6](labjack/LabJackU6.md): Notes on the older LabJack U6.
 
 Specific information on the hot films deployed for the M2HATS project can be
 found on the [hot films](https://wiki.ucar.edu/display/M2HATSISFS/hot+films)
@@ -179,7 +179,7 @@ bokeh serve --show app_hotfilm.py --args hotfilm_20230908_100000.dat --delay 1
 
 This is a typical web plot for M2HATS:
 
-![Typical web plot](hotfilm_20230808_171339.png)
+![Typical web plot](docs/hotfilm_20230808_171339.png)
 
 ## Diagnostics
 
@@ -319,7 +319,7 @@ LabJack will see a voltage which jumps between 0 and about 7.3 V:
 
 The web plots look like this:
 
-![Shorted plots](hotfilm_screenshot_20230729_111733.png)
+![Shorted plots](docs/hotfilm_screenshot_20230729_111733.png)
 
 ### Shorting cap
 
@@ -467,17 +467,19 @@ through a laptop, the digitized waveform signal looks clean.  When powered by
 the DSM USB or by the LabJack AC-USB adapter, the signal drops towards 0 V at
 somewhat regular intervals.  Here is an example:
 
-![Power source interference](ground-interference.png).
+![Power source interference](docs/ground-interference.png).
 
 The interference does not seem to happen without the waveform generator
 connected, regardless of the LabJack power source.  Or so we hope.
 
 ### 4 KHz Sampling
 
-See [Sampling4K.md](Sampling4K.md) for notes on the switch from 2K to 4K
+See [Sampling4K.md](docs/Sampling4K.md) for notes on the switch from 2K to 4K
 sampling.
 
 ## Example Data
+
+These files are kept in directory `tests/test_data`:
 
 ### sawtooth.dat
 

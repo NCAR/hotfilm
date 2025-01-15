@@ -1,12 +1,17 @@
 
 from pytest import approx
 import logging
+from pathlib import Path
 import numpy as np
 from isfs_dataset import IsfsDataset, rdatetime
 
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
+
+
+_this_dir = Path(__file__).parent
+_test_data_dir = _this_dir / "test_data"
 
 
 def test_rdatetime():
@@ -31,7 +36,7 @@ def test_rdatetime():
 
 
 def test_read_winds():
-    ids = IsfsDataset().open("test_data/u_2m_t0_20230804_160000.nc")
+    ids = IsfsDataset().open(_test_data_dir / "u_2m_t0_20230804_160000.nc")
     ds = ids.dataset
     u = ids.get_variable("u_2m_t0")
     first = ds.time[0]
