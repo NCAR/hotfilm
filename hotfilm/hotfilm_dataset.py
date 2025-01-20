@@ -77,8 +77,10 @@ class HotfilmCalibration:
     def fit(self, spd: xr.DataArray, eb: xr.DataArray):
         """
         Given an array of hotfilm bridge voltages and a corresponding array of
-        wind speeds, compute the coefficients of a least squares fit to the
-        hotfilm_voltage_to_speed() function and store them in this object.
+        wind speeds, already resampled to a common time period, compute the
+        coefficients of a least squares fit to the hotfilm_voltage_to_speed()
+        function and store them in this object.  The arrays are first aligned
+        on the time coordinate, then NaN values are masked out.
 
         The convention seems to be to find coefficients a, b by fitting
         x=spd^0.45 mapping to y=eb^2, even though what we will want to derive
@@ -87,7 +89,18 @@ class HotfilmCalibration:
         hotfilm_voltage_to_speed(), a is the 0-degree coefficient and b is the
         1-degree coefficient.
         """
-        logger.debug("spd=%s, eb=%s", spd, eb)
+        logger.debug("\nspd=%s\neb=%s", spd, eb)
+        # find the intersection of the time dimensions
+        logger.debug("aligning spd and eb...")
+        spd, eb = xr.align(spd, eb)
+        # mask NaN and infinite values.  The logical and of DataArray objects
+        # with different time coordinates (eg time and time60) is 2D, even
+        # though the coordinates themselves are the same after the alignment
+        # above.  Thus the underlying numpy boolean arrays are combined.
+        mask = np.logical_and(np.isfinite(spd).data, np.isfinite(eb).data)
+        logger.debug("\nmask=%s", mask)
+        spd = spd[mask]
+        eb = eb[mask]
         if len(spd) < 2 or len(eb) < 2:
             raise Exception("too few data points to calibrate")
         elif len(spd) != len(eb):
@@ -96,9 +109,18 @@ class HotfilmCalibration:
         self.eb = eb
         self.spd = spd
         pfit = Polynomial.fit(spd**0.45, eb**2, 1)
-        logger.debug("polynomial fit: %s", pfit)
-        self.a, self.b = pfit.convert().coef[0:2]
+        logger.debug("polynomial fit: %s, window=%s, domain=%s",
+                     pfit, pfit.window, pfit.domain)
+        pfit = pfit.convert()
+        self.a, self.b = pfit.coef[0:2]
+        logger.debug("polynomial converted: a=%.2f, b=%.2f, %s, "
+                     "window=%s, domain=%s",
+                     self.a, self.b, pfit, pfit.window, pfit.domain)
         return self
+
+    def num_points(self):
+        "Return the number of points used in this calibration."
+        return len(self.eb)
 
     def speed(self, eb):
         """
@@ -181,7 +203,7 @@ if __name__ == "__main__":
     filename = sys.argv[1]
     films = HotfilmDataset().open(filename)
     sonics = IsfsDataset().open(sys.argv[2])
-    logger.debug("hotfilm.timev=%s", films.timev)
+    logger.debug("\nhotfilm.timev=%s", films.timev)
     calperiod = np.timedelta64(300, 's')
     # start with first time in hotfilm dataset rounded to cal period.
     first = films.timev.data[0]
@@ -195,11 +217,11 @@ if __name__ == "__main__":
     uname = u.attrs['short_name']
     wname = w.attrs['short_name']
     spd.attrs['long_name'] = f'|({uname},{wname})| (m/s)'
-    logger.debug("spd=%s", spd)
+    logger.debug("\nspd=%s", spd)
     eb = films.dataset['ch0']
     # this should have been in the dataset, so hardcode it until it is
     eb.attrs['long_name'] = f'{eb.name} bridge voltage (V)'
-    logger.debug("eb=%s", eb)
+    logger.debug("\neb=%s", eb)
     cals = []
     # Panel of calibration plots
     nrows, ncols = 2, 3
