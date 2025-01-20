@@ -40,16 +40,16 @@ def test_read_winds():
     ds = ids.dataset
     u = ids.get_variable("u_2m_t0")
     first = ds.time[0]
+    assert first == np.datetime64('2023-08-04T16:00:00.500')
     last = ds.time[-1]
-    u = ids.reshape_variable(u)
-    assert len(u.values) == 3600 * 60
-    assert u.values[0] == approx(0.06215948)
-    assert u.values[-1] == approx(-0.145788)
+    assert len(u.data) == 3600 * 60
+    assert u.data[0] == approx(0.06215948)
+    assert u.data[-1] == approx(-0.145788)
     dtime = u.dims[0]
     # the first half-second timestamp at 500 ms does not match exactly the
     # 30th timestamp at 16666666 ns, but it should round to exactly 500 ms.
     us = np.timedelta64(1, 'us')
-    assert rdatetime(u.coords[dtime][30].values, us) == first
+    assert rdatetime(u.coords[dtime][30].data, us) == first
     xlast = last.values + 29 * np.timedelta64(16666666, 'ns')
-    assert rdatetime(u.coords[dtime][-1].values, us) == rdatetime(xlast, us)
+    assert rdatetime(u.coords[dtime][-1].data, us) == rdatetime(xlast, us)
     ds.close()

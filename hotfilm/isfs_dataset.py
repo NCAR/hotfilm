@@ -5,7 +5,7 @@ Read wind vectors from ISFS netcdf files.
 import logging
 import numpy as np
 import xarray as xr
-
+import datetime as dt
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,16 @@ class IsfsDataset:
 
     def open(self, filename):
         self.dataset = xr.open_dataset(filename)
-        self.timev = self.dataset['time']
+        timev = self.dataset['time']
+        # for some reason xarray only parses the date in the time units, so
+        # the time of day needs to be added.
+        timespec = 'seconds since %Y-%m-%d %H:%M:%S 00:00'
+        units = timev.encoding['units']
+        tod = dt.datetime.strptime(units, timespec)
+        seconds = tod.hour * 3600 + tod.minute * 60 + tod.second
+        timev = timev + np.timedelta64(seconds, 's')
+        self.dataset['time'] = timev
+        self.timev = timev
         self.timed = self.timev.dims[0]
         logger.debug(f"Opened dataset: {filename}, %s...%s",
                      self.timev[0], self.timev[-1])
@@ -83,6 +92,7 @@ class IsfsDataset:
         dsv: xr.DataArray
         dsv = self.dataset[variable]
         self.interpolate_times(dsv)
+        dsv = self.reshape_variable(dsv)
         return dsv
 
     def reshape_variable(self, dsv: xr.DataArray):
@@ -96,7 +106,9 @@ class IsfsDataset:
         dname = self.resample_dim_name(dsv)
         dtimes = self.interpolate_times(dsv)
         times = dtimes.values.flatten()
-        reshaped = xr.DataArray(name=dsv.name, data=data, coords={dname: times})
+        reshaped = xr.DataArray(name=dsv.name, data=data,
+                                coords={dname: times},
+                                attrs=dsv.attrs)
         logger.debug("reshaped %s: %s", dsv.name, reshaped)
         return reshaped
 
