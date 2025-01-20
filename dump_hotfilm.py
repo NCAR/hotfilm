@@ -153,6 +153,15 @@ class ReadHotfilm:
 
     adjust_time: int
 
+    # really these should come from the xml, but hardcode for now
+    HEIGHTS = {
+        'ch0': '0.5m',
+        'ch1': '1m',
+        'ch2': '2m',
+        'ch3': '4m'
+    }
+    SITE = 't0'
+
     def __init__(self):
         self.source = ["sock:192.168.1.220:31000"]
         self.cmd = None
@@ -584,7 +593,13 @@ adj scan strt: %s
                 ds['time'].encoding = {'dtype': 'int64'}
                 for c in data.columns:
                     ds[c] = ('time', data[c])
+                    # use conventional netcdf and ISFS attributes
                     ds[c].attrs['units'] = 'V'
+                    ds[c].attrs['long_name'] = f'{c} bridge voltage'
+                    height = self.HEIGHTS[c]
+                    ds[c].attrs['short_name'] = f'Eb.{height}.{self.SITE}'
+                    ds[c].attrs['site'] = self.SITE
+                    ds[c].attrs['height'] = height
                 datasets.append(ds)
                 last = data
 
