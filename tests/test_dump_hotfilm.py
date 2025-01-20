@@ -7,6 +7,7 @@ from pathlib import Path
 import logging
 import datetime as dt
 import pandas as pd
+import xarray as xr
 import pytest
 
 from dump_hotfilm import ReadHotfilm
@@ -296,14 +297,27 @@ def test_netcdf_output():
     assert xout.exists() and xout.stat().st_size > 0
     # make sure we get permissions ugo=r also
     assert xout.stat().st_mode & 0o444 == 0o444
-    # hardcode for now, but might need to be configurable.  it should also be
-    # feasible to just open both files with xarray and compare the datasets.
+
+    xbase = _this_dir / "baseline" / "channel2_20230804_180000_005.nc"
+    tds = xr.open_dataset(xout)
+    xds = xr.open_dataset(xbase)
+    xout = xout.relative_to(Path.cwd())
+    xbase = xbase.relative_to(Path.cwd())
+    if tds.identical(xds):
+        # record the test, knowing that it passed and no comparison needed
+        assert True, f"netcdf datasets {xbase} and {xout} are identical"
+        return
+    # the identical() method does not show the differences, so use nc_compare
+    # for that.  hardcode the path for now, but might need to be configurable.
+    # at least we can know the test fails without requiring nc_compare.
+    # another approach might be to implement pytest_assertrepr_compare().
     nc_compare = Path("/opt/local/bin/nc_compare")
     if not nc_compare.exists():
-        pytest.xfail(f"{nc_compare} not found")
-    xbase = _this_dir / "baseline" / "channel2_20230804_180000_005.nc"
+        pytest.fail(f"netcdf datasets {xbase} and {xout} differ, "
+                    f"but {nc_compare} not found to show differences.")
     args = [nc_compare, xbase, xout,
             "--showindex", "--showtimes", "--nans-equal", "--showequal"]
     args = [str(arg) for arg in args]
     logger.debug("comparing: %s", " ".join(args))
     assert sp.check_call(args) == 0
+    pytest.fail("datasets not identical, but nc_compare returned 0!")
