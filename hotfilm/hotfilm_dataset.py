@@ -17,20 +17,32 @@ Class and functions to read and process hotfilm netcdf data.
 import logging
 import xarray as xr
 import numpy as np
-from scipy.optimize import curve_fit
+from numpy.polynomial import Polynomial
 import matplotlib.pyplot as plt
 import matplotlib.axes
 
 
+logger = logging.getLogger(__name__)
+
+
+def _dt_string(dt: np.datetime64) -> str:
+    return np.datetime_as_string(dt, unit='s')
+
+
 def hotfilm_voltage_to_speed(eb, a, b):
     """
-    Given the relationship between hotfilm bridge voltage and wind speed:
+    Given this relationship between hotfilm bridge voltage and wind speed:
 
-        eb = coef[1] + coef[2] * spd^0.45
+        eb^2 = a + b * spd^0.45
 
     Compute the wind speed from Eb with the coefficients a and b:
 
         spd = ((eb^2 - a)/b)^(1/0.45)
+
+    The coefficient names a and b match the usage in
+    https://www.thermopedia.com/content/853/, they intentionally are different
+    from the usual linear coefficients of ax + b, and they are determined by a
+    least squares fit.
     """
     spd = ((eb**2 - a)/b)**(1/0.45)
     return spd
@@ -42,34 +54,56 @@ class HotfilmCalibration:
     """
     a: float
     b: float
-    pcov: np.ndarray
     eb: xr.DataArray
     spd: xr.DataArray
 
     def __init__(self):
-        self.a = None
-        self.b = None
-        self.pcov = None
         self.eb = None
         self.spd = None
+        self.a = None
+        self.b = None
+        self.mean_interval = '1s'
+
+    def calibrate(self, spd: xr.DataArray, eb: xr.DataArray,
+                  begin: np.datetime64, end: np.datetime64):
+        """
+        """
+        spd = spd.sel(**{spd.dims[0]: slice(begin, end)})
+        spd = resample_mean(spd, self.mean_interval)
+        eb = eb.sel(**{eb.dims[0]: slice(begin, end)})
+        eb = resample_mean(eb, self.mean_interval)
+        return self.fit(spd, eb)
 
     def fit(self, spd: xr.DataArray, eb: xr.DataArray):
         """
         Given an array of hotfilm bridge voltages and a corresponding array of
         wind speeds, compute the coefficients of a least squares fit to the
         hotfilm_voltage_to_speed() function and store them in this object.
+
+        The convention seems to be to find coefficients a, b by fitting
+        x=spd^0.45 mapping to y=eb^2, even though what we will want to derive
+        is spd as a function of eb.  The coefficients returned by
+        Polynomial.fit() are in order of degree.  So as mentioned in
+        hotfilm_voltage_to_speed(), a is the 0-degree coefficient and b is the
+        1-degree coefficient.
         """
+        logger.debug("spd=%s, eb=%s", spd, eb)
+        if len(spd) < 2 or len(eb) < 2:
+            raise Exception("too few data points to calibrate")
+        elif len(spd) != len(eb):
+            raise Exception(f"num spd points {len(spd)} does not "
+                            f"equal num eb points {len(eb)}")
         self.eb = eb
         self.spd = spd
-        popt, pcov = curve_fit(hotfilm_voltage_to_speed, eb, spd)
-        self.a, self.b = popt
-        self.pcov = pcov
+        pfit = Polynomial.fit(spd**0.45, eb**2, 1)
+        logger.debug("polynomial fit: %s", pfit)
+        self.a, self.b = pfit.convert().coef[0:2]
         return self
 
     def speed(self, eb):
         """
         Given an array of hotfilm bridge voltages, compute the corresponding
-        wind speeds using the coefficients of the least squares fit.
+        wind speeds using the stored coefficients of the least squares fit.
         """
         return hotfilm_voltage_to_speed(eb, self.a, self.b)
 
@@ -77,16 +111,25 @@ class HotfilmCalibration:
         """
         Plot the calibration curve on the given axes.
         """
-        eb = np.linspace(self.eb.min(), self.eb.max(), 100)
+        logger.debug("plotting calibration curve: eb=%s, spd=%s",
+                     self.eb, self.spd)
+        logger.debug("a=%s, b=%s", self.a, self.b)
+        ebmin = self.eb.min().item()
+        ebmax = self.eb.max().item()
+        logger.debug("min eb=%s, max eb=%s", ebmin, ebmax)
+        eb = np.linspace(ebmin, ebmax, 100)
         spd = self.speed(eb)
-        label = f'Fit: Eb = ((Spd^2 - {self.a:.2f})/{self.b:.2f})^(1/0.45)'
+        label = f'Fit: Spd^0.45 = (eb^2 - {self.a:.2f})/{self.b:.2f})'
+        # plot the calibration curve
         ax.plot(spd, eb, color='red', label=label)
+        # plot the data
         ax.scatter(self.spd, self.eb)
         ax.set_xlabel(f"{self.spd.attrs['long_name']}")
         ax.set_ylabel(f"{self.eb.attrs['long_name']}")
-        title = (f"{self.eb.attrs['long_name']} vs "
-                 f"{self.spd.attrs['long_name']}")
-        ax.set_title(title)
+        dtime = self.eb.coords[self.eb.dims[0]]
+        first = dtime.data[0]
+        last = dtime.data[-1]
+        ax.set_title(f"{_dt_string(first)} to {_dt_string(last)}")
         ax.legend()
 
 
@@ -118,3 +161,72 @@ class HotfilmDataset:
 
     def close(self):
         self.dataset.close()
+
+
+import sys
+from isfs_dataset import IsfsDataset, rdatetime
+
+
+def resample_mean(da: xr.DataArray, period: str) -> xr.DataArray:
+    """
+    Resample the given DataArray to the mean over the given period, assuming
+    only that time is the first dimension but not necessarily named 'time'.
+    """
+    indexer = {da.dims[0]: period}
+    return da.resample(**indexer).mean(skipna=True, keep_attrs=True)
+
+
+if __name__ == "__main__":
+    logger.setLevel(logging.DEBUG)
+    filename = sys.argv[1]
+    films = HotfilmDataset().open(filename)
+    sonics = IsfsDataset().open(sys.argv[2])
+    logger.debug("hotfilm.timev=%s", films.timev)
+    calperiod = np.timedelta64(300, 's')
+    # start with first time in hotfilm dataset rounded to cal period.
+    first = films.timev.data[0]
+    last = films.timev.data[-1]
+    logger.debug("first=%s, type=%s", first, type(first))
+    begin = rdatetime(first, calperiod)
+    end = rdatetime(last, calperiod)
+    u = sonics.get_variable("u_0_5m_t0")
+    w = sonics.get_variable("w_0_5m_t0")
+    spd = np.sqrt(u**2 + w**2)
+    uname = u.attrs['short_name']
+    wname = w.attrs['short_name']
+    spd.attrs['long_name'] = f'|({uname},{wname})| (m/s)'
+    logger.debug("spd=%s", spd)
+    eb = films.dataset['ch0']
+    # this should have been in the dataset, so hardcode it until it is
+    eb.attrs['long_name'] = f'{eb.name} bridge voltage (V)'
+    logger.debug("eb=%s", eb)
+    cals = []
+    # Panel of calibration plots
+    nrows, ncols = 2, 3
+    fig, axs = plt.subplots(nrows, ncols)
+    nplots = nrows * ncols
+
+    def subplot(iplot):
+        if nrows * ncols == 1:
+            return axs
+        return axs[iplot // ncols, iplot % ncols]
+
+    title = f'Calibrations from {_dt_string(begin)} to {_dt_string(end)}'
+    iplot = 0
+    while begin < end and iplot < nplots:
+        next_time = begin + calperiod
+        logger.debug("calibrating from %s to %s", begin, next_time)
+        # select voltage and wind speeds
+        # use open-ended slice for next_time
+        end_slice = next_time - np.timedelta64(1, 'ns')
+        try:
+            hfc = HotfilmCalibration().calibrate(spd, eb, begin, end_slice)
+            hfc.plot(subplot(iplot))
+            iplot += 1
+            cals.append(hfc)
+        except Exception as e:
+            logger.error(f"calibration failed: {e}")
+        begin = next_time
+    films.close()
+    fig.suptitle(title, fontsize=16)
+    plt.show()
