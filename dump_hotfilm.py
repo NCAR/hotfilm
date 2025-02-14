@@ -31,7 +31,7 @@ _prefix_rx = re.compile(
     r"(?P<dsmid>\d+), *(?P<spsid>\d+) *(?P<len>\d+) (?P<data>.*)$")
 
 
-def datetime_from_match(match):
+def datetime_from_match(match) -> np.datetime64:
     # split seconds at the decimal to get microseconds
     seconds, _, usecs = match['second'].partition('.')
     seconds = int(seconds)
@@ -39,16 +39,21 @@ def datetime_from_match(match):
     when = dt.datetime(int(match['year']), int(match['month']),
                        int(match['day']),
                        int(match['hour']), int(match['minute']),
-                       seconds, usecs,
-                       dt.timezone.utc)
+                       seconds, usecs)
+    when = np.datetime64(when, 'ns')
     return when
+
+
+def ft(dt64):
+    return np.datetime_as_string(dt64, unit='us')
 
 
 _microseconds_per_seconds = 1000000
 _microseconds_per_day = 24*60*60*_microseconds_per_seconds
 
 
-def td_to_microseconds(td: dt.timedelta) -> int:
+def td_to_microseconds(td64: np.timedelta64) -> int:
+    td = pd.to_timedelta(td64)
     return (td.days * _microseconds_per_day +
             td.seconds * _microseconds_per_seconds +
             td.microseconds)
@@ -57,10 +62,10 @@ def td_to_microseconds(td: dt.timedelta) -> int:
 class time_formatter:
 
     ISO = "iso"
-    EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+    EPOCH = np.datetime64(dt.datetime(1970, 1, 1))
     FLOAT_SECONDS = "%s.%f"
 
-    def __init__(self, timeformat: str, first: dt.datetime, interval: int):
+    def __init__(self, timeformat: str, first: np.datetime64, interval: int):
         self.timeformat = timeformat
         self.first = first
         self.interval = interval
@@ -71,8 +76,7 @@ class time_formatter:
         if self.timeformat == self.ISO:
             self.formatter = self.format_iso
         elif mformat == self.FLOAT_SECONDS:
-            self.base_usecs = int((first - self.EPOCH).total_seconds()) * 1e6
-            self.base_usecs += first.microsecond
+            self.base_usecs = td_to_microseconds(first - self.EPOCH)
             self.formatter = self.format_sf
             self.i = 0
         elif "%s" in mformat:
@@ -80,10 +84,10 @@ class time_formatter:
         else:
             self.formatter = self.format_strftime
 
-    def format_strftime(self, when):
-        return when.strftime(self.timeformat)
+    def format_strftime(self, when: np.datetime64):
+        return pd.to_datetime(when).strftime(self.timeformat)
 
-    def format_s(self, when):
+    def format_s(self, when: np.datetime64):
         "Interpolate a time format which contains %s"
         # The %s specifier to strftime does the wrong thing if TZ is not UTC.
         # Rather than modify the environment just for this, interpolate %s
@@ -93,10 +97,10 @@ class time_formatter:
         mformat = self.timeformat.replace("%s", str(seconds))
         return when.strftime(mformat)
 
-    def format_iso(self, when):
-        return when.isoformat()
+    def format_iso(self, when: np.datetime64):
+        return pd.to_datetime(when).isoformat()
 
-    def format_sf(self, when):
+    def format_sf(self, when: np.datetime64):
         "Interpolate %s%f time format by exploiting regular interval."
         usecs = self.base_usecs + self.i * self.interval
         self.i += 1
@@ -113,8 +117,8 @@ class OutputPath:
         self.path = None
         self.tfile = None
 
-    def start(self, filespec: str, data: pd.DataFrame):
-        when = data.index[0]
+    def start(self, filespec: str, data: xr.Dataset):
+        when = pd.to_datetime(data.time.data[0])
         path = Path(when.strftime(filespec))
         tfile = tempfile.NamedTemporaryFile(dir=str(path.parent),
                                             prefix=str(path)+'.',
@@ -139,11 +143,12 @@ class OutputPath:
         self.when = None
 
 
-def iso_to_datetime(iso: str) -> dt.datetime:
+def iso_to_datetime64(iso: str) -> np.datetime64:
     """
-    Convert an ISO formatted string to a datetime object with UTC timezone.
+    Convert an ISO formatted string to a datetime64.  The timezone is assumed
+    to be UTC, since numpy.datetime64 does not support timezone offsets.
     """
-    return dt.datetime.fromisoformat(iso).replace(tzinfo=dt.timezone.utc)
+    return np.datetime64(dt.datetime.fromisoformat(iso))
 
 
 class ReadHotfilm:
@@ -152,6 +157,8 @@ class ReadHotfilm:
     """
 
     adjust_time: int
+    scan: xr.Dataset
+    next_scan: xr.Dataset
 
     # really these should come from the xml, but hardcode for now
     HEIGHTS = {
@@ -170,7 +177,7 @@ class ReadHotfilm:
         self.channels = None
         # insert a delay between samples read from a file
         self.delay = 0
-        # dataframe for the current scan as it accumulates channels
+        # Dataset for the current scan as it accumulates channels
         self.scan = None
         # cache the start of the next block
         self.next_scan = None
@@ -203,7 +210,7 @@ class ReadHotfilm:
         self.minblock = mmin*60
         self.maxblock = mmax*60
 
-    def format_time(self, when: dt.datetime):
+    def format_time(self, when: np.datetime64):
         "Convenient shortcut, but not optimal."
         return time_formatter(self.timeformat, when, 0)(when)
 
@@ -229,47 +236,44 @@ class ReadHotfilm:
         logger.debug("selected channels: %s",
                      ",".join(self.channels) if self.channels else "all")
 
-    def get_data(self):
+    def get_data(self) -> Union[xr.DataArray, None]:
         """
-        Return the next selected channel as a DataFrame.
+        Return the next selected channel as a DataArray.
         """
         data = None
         while data is None:
-            line = next(self.line_iterator, None)
-            if not line:
+            if not (line := next(self.line_iterator, None)):
                 break
             data = self.parse_line(line)
             if data is None:
                 continue
             # If not yet into the selected range, skip it.
-            when = data.index[0]
+            when = data.time[0]
             if self.begin and when < self.begin:
                 data = None
             elif self.end and when > self.end:
                 data = None
                 break
-            elif (self.channels and data.columns[0] not in self.channels):
+            elif (self.channels and data.name not in self.channels):
                 data = None
 
         if data is not None and self.delay:
             time.sleep(self.delay)
         return data
 
-    def skip_scan(self, scan):
+    def skip_scan(self, scan: xr.Dataset) -> bool:
         """
-        Return True if this scan contains dummy values and should be skipped.
+        Return True if any data variables (no sense checking time) in this
+        scan contain dummy values.  @p scan must be a Dataset with one or more
+        channels.
         """
-        return (scan == -9999.0).any().any()
+        skip = any([(x == -9999.0).any() for x in scan.data_vars.values()])
+        # logger.debug("skip_scan is '%s' on data: %s", skip, scan)
+        return skip
 
-    def time_selected(self, scan: pd.DataFrame):
-        when = scan.index[0]
-        selected = not self.begin or when >= self.begin
-        selected = selected and (not self.end or when <= self.end)
-        return selected
-
-    def get_scan(self) -> pd.DataFrame:
+    def get_scan(self) -> xr.Dataset:
         """
-        Return a DataFrame with all the channels in a single scan.
+        Return a Dataset with all the channels in a single scan.
         """
         # The full scan to be returned.
         scan = None
@@ -280,20 +284,21 @@ class ReadHotfilm:
                 scan = self.scan
                 self.scan = None
                 break
-            when = data.index[0]
-            if self.scan is None or self.scan.index[0] != when:
-                logger.debug("starting new scan at %s", when)
+            when = data.time[0]
+            if self.scan is None or self.scan.time[0] != when:
+                logger.debug("starting new scan at %s", ft(when))
                 # the current scan, if any, is what will be returned
                 scan = self.scan
-                self.scan = data
+                self.scan = xr.Dataset({data.name: data})
             else:
                 # join this channel with existing scan
-                name = data.columns[0]
-                logger.debug("adding %s to current scan at %s", name, when)
-                self.scan[name] = data[name]
+                name = data.name
+                logger.debug("adding %s to current scan at %s",
+                             name, ft(when))
+                self.scan[name] = data
         return scan
 
-    def is_contiguous(self, frame: pd.DataFrame, scan: pd.DataFrame):
+    def is_contiguous(self, ds: xr.Dataset, scan: xr.Dataset) -> bool:
         """
         Return true if @p scan looks contiguous with @p frame, and if so,
         adjust the timestamps in @p scan accordingly.
@@ -316,15 +321,15 @@ class ReadHotfilm:
         aligned to it.  I think in the worse case a block could be off by a
         second.
         """
-        next = scan.index[0] + dt.timedelta(microseconds=self.adjust_time)
-        interval = self.get_interval(frame)
+        next = scan.time[0] + np.timedelta64(self.adjust_time, 'us')
+        interval = self.get_interval(ds)
         # the expected start of the next scan is last + interval, and the
         # shift between expected time and actual time is calculated with the
         # current time adjustment included.  the shift is how much to add to
         # the next frame to match the expected next times.
-        last = frame.index[-1]
-        xnext = last + dt.timedelta(microseconds=interval)
-        shift = (next - xnext) / dt.timedelta(microseconds=1)
+        last = ds.time[-1]
+        xnext = last + np.timedelta64(interval, 'us')
+        shift = int(np.round((next - xnext) / np.timedelta64(1, 'us')))
         # if the difference is only an interval or two, then assume the scans
         # are continguous but the PPS shifted, and set the adjustment so next
         # + adj lines up with xnext.
@@ -336,10 +341,8 @@ interval (us): %d
 scan expected: %s
 adj scan strt: %s
  shift (usec): %d""",
-                     (next - xnext), self.adjust_time,
-                     frame.index[-1].isoformat(), interval,
-                     xnext.isoformat(),
-                     next, shift)
+                     pd.to_timedelta((next - xnext).data), self.adjust_time,
+                     ft(ds.time[-1]), interval, ft(xnext), ft(next), shift)
 
         # include the shift in the new adjustment, then check if the
         # adjustment has grown too large or the latest shift is too large.
@@ -351,47 +354,51 @@ adj scan strt: %s
             # two seconds, but we can be relatively confident they are
             # contiguous if there are no dummy scans between them.
             logger.error("%d usec shift from %s to %s is too large",
-                         shift, frame.index[-1].isoformat(), next.isoformat())
+                         shift, ft(ds.time[-1]), ft(next))
         elif abs(self.adjust_time) > 5e5:
             # half second is too far out of sync
             logger.error("%d usec shift from %s to %s: "
                          "total adjustment %d usec "
                          "is too large and will be reset ",
-                         shift, frame.index[-1].isoformat(), next.isoformat(),
-                         self.adjust_time)
+                         shift, ft(ds.time[-1]), ft(next), self.adjust_time)
         else:
             logger.info("%d usec shift, for scan starting at %s, "
                         "time adjustment is now %d us", shift,
-                        scan.index[0].isoformat(), self.adjust_time)
+                        ft(scan.time[0]), self.adjust_time)
             shift = 0
 
         if shift == 0 and self.adjust_time:
             # since adjust_time includes the latest shift, this should bring
             # the given scan into alignment with given data frame.
-            scan.index += dt.timedelta(microseconds=self.adjust_time)
+            scan['time'] = scan.time + np.timedelta64(self.adjust_time, 'us')
 
         return shift == 0
 
-    def get_interval(self, frame) -> int:
+    def get_interval(self, ds: xr.Dataset) -> int:
         "Return microseconds between scans, the inverse of scan rate."
-        td = frame.index[-1] - frame.index[-2]
-        return td / dt.timedelta(microseconds=1)
+        td = ds.time[-1] - ds.time[-2]
+        return int(td / np.timedelta64(1, 'us'))
 
-    def get_period(self, frame: pd.DataFrame,
-                   scan: pd.DataFrame = None) -> dt.timedelta:
+    def get_period(self, ds: xr.Dataset,
+                   scan: xr.Dataset = None) -> np.timedelta64:
         """
         Return the time period covered by this frame and given scan, including
         the interval after the last point.
         """
         if scan is None:
-            scan = frame
-        first = frame.index[0]
-        last = scan.index[-1]
-        interval = self.get_interval(frame)
-        period = last - first + dt.timedelta(microseconds=interval)
-        return period
+            scan = ds
+        first = ds.time[0]
+        last = scan.time[-1]
+        interval = self.get_interval(ds)
+        period = last - first + np.timedelta64(interval, 'us')
+        # Using item() returns a *scalar*, which in this case would be the
+        # number of nanoseconds in the timedelta64.  We want the actual
+        # underlying timedelta64 type, so use .data.
+        #
+        # logger.debug("get_period() -> %s", period.data)
+        return period.data
 
-    def read_scans(self) -> Generator[pd.DataFrame, None, None]:
+    def read_scans(self) -> Generator[xr.Dataset, None, None]:
         """
         Yield the minimum time period of scans and the following scans until
         there is a break.
@@ -402,7 +409,7 @@ adj scan strt: %s
         scan_list = []
         last_scan = None
         # period tracks the length of the current block so far
-        period = dt.timedelta(seconds=0)
+        period = np.timedelta64(0, 's')
         while True:
             scan = self.next_scan
             skipped = False
@@ -414,21 +421,21 @@ adj scan strt: %s
                 pass
             elif self.skip_scan(scan):
                 # If there are any dummy values at all, then skip the entire
-                # frame.  If the labjack could not keep up and fill the entire
-                # scan, then the pps count also contained dummy values, in
-                # which case the computed timestamp is likely wrong too.
+                # scan (ie, all the channels in this scan).  If the labjack
+                # could not keep up and fill the entire scan, then the pps
+                # count also contained dummy values, in which case the
+                # computed timestamp is likely wrong too.
                 logger.error("skipping scan with dummy values at %s",
-                             scan.index[0].isoformat())
+                             ft(scan.time[0]))
                 scan = None
                 skipped = True
             elif not scan_list and not minreached:
-                logger.info("starting scan block: %s",
-                            scan.index[0].isoformat())
+                logger.info("starting scan block: %s", ft(scan.time[0]))
                 scan_list.append(scan)
                 period += self.get_period(scan)
             elif self.is_contiguous(last_scan, scan):
                 period += self.get_period(scan)
-                if period <= dt.timedelta(seconds=self.maxblock):
+                if period <= np.timedelta64(self.maxblock, 's'):
                     scan_list.append(scan)
                 else:
                     self.next_scan = scan
@@ -439,11 +446,13 @@ adj scan strt: %s
             last_scan = scan_list[-1] if scan_list else None
 
             if not minreached:
-                minblock = dt.timedelta(seconds=self.minblock)
+                minblock = np.timedelta64(self.minblock, 's')
                 minreached = (period >= minblock)
                 if minreached:
-                    logger.info("minimum block period %s reached at %s",
-                                minblock, last_scan.index[-1].isoformat())
+                    logger.info("minimum block period %s reached at %s "
+                                "with scan period %s",
+                                minblock, ft(last_scan.time[-1]),
+                                np.timedelta64(period, 's'))
 
             if minreached and scan_list:
                 # flush the scan list
@@ -455,11 +464,10 @@ adj scan strt: %s
                 # a block is ending.  if there are still scans in the list,
                 # they were not enough to make a minimum block.
                 if scan_list:
-                    first = scan_list[0].index[0]
-                    last = scan_list[-1].index[-1]
+                    first = scan_list[0].time[0]
+                    last = scan_list[-1].time[-1]
                     logger.error("block of scans is too short (%s), "
-                                 "from %s to %s",
-                                 period, first.isoformat(), last.isoformat())
+                                 "from %s to %s", period, ft(first), ft(last))
                     scan_list.clear()
 
                 # if a block of scans has already been returned, or else there
@@ -471,33 +479,32 @@ adj scan strt: %s
 
                 # reset the time adjustment and period for the next block
                 self.adjust_time = 0
-                period = dt.timedelta(seconds=0)
+                period = np.timedelta64(0, 's')
 
         return None
 
-    def get_block(self) -> pd.DataFrame:
+    def get_block(self) -> xr.Dataset:
         """
-        Read a block of scans and return them as a single DataFrame.
+        Read a block of scans and return them as a single Dataset.
         """
-        scans = list(self.read_scans())
-        if scans:
-            return pd.concat(scans)
+        if scans := list(self.read_scans()):
+            return xr.merge(scans)
         return None
 
-    def parse_line(self, line) -> Union[pd.DataFrame, None]:
+    def parse_line(self, line) -> Union[xr.DataArray, None]:
         match = _prefix_rx.match(line) if line else None
         if not match:
             return None
         when = datetime_from_match(match)
         y = np.fromstring(match.group('data'), dtype=float, sep=' ')
-        step = dt.timedelta(microseconds=1e6/len(y))
+        step = np.timedelta64(int(1e6/len(y)), 'us')
         x = [when + (i * step) for i in range(0, len(y))]
         if False and line:
             logger.debug("from line: %s...; x[0]=%s, x[%d]=%s", line[:30],
                          x[0].isoformat(), len(x)-1, x[-1].isoformat())
         channel = int(match.group('spsid')) - 520
         name = f"ch{channel}"
-        data = pd.DataFrame({name: y}, index=x)
+        data = xr.DataArray(y, name=name, coords={'time': x})
         return data
 
     def write_text(self, out):
@@ -509,10 +516,10 @@ adj scan strt: %s
             out.write(" %s" % (c))
         out.write("\n")
         while data is not None:
-            for i in range(0, len(data)):
-                out.write("%s" % (self.format_time(data.index[i])))
+            for i in range(0, len(data.time)):
+                out.write("%s" % (self.format_time(data.time[i])))
                 for c in data.columns:
-                    out.write(" %s" % (data[c][i]))
+                    out.write(" %s" % (data[c].data[i]))
                 out.write("\n")
             data = self.get_scan()
 
@@ -532,22 +539,22 @@ adj scan strt: %s
                 if header is None:
                     header = data
                     interval = self.get_interval(data)
-                    when = data.index[0]
+                    when = data.time.data[0]
                     tformat = time_formatter(self.timeformat, when, interval)
                     tfile = outpath.start(filespec, data)
                     out = open(tfile.name, "w", buffering=32*65536)
                     out.write("time")
-                    for c in data.columns:
+                    for c in data.data_vars.keys():
                         out.write(" %s" % (c))
                     out.write("\n")
 
                 # need precision-1 decimal places since precision includes the
                 # integer digit of voltage.
                 fmt = f" %.{self.precision-1}f"
-                for i in range(0, len(data)):
-                    out.write("%s" % (tformat(data.index[i])))
-                    for c in data.columns:
-                        out.write(fmt % (data[c].iloc[i]))
+                for i in range(0, len(data.time)):
+                    out.write("%s" % (tformat(data.time.data[i])))
+                    for c in data.data_vars.keys():
+                        out.write(fmt % (data[c].data[i]))
                     out.write("\n")
 
                 last = data
@@ -555,7 +562,8 @@ adj scan strt: %s
             if out:
                 out.close()
                 # insert the file length into the final filename
-                minutes = self.get_period(header, last).total_seconds() // 60
+                period = pd.to_timedelta(self.get_period(header, last))
+                minutes = period.total_seconds() // 60
                 outpath.finish(minutes)
 
             if header is None:
@@ -580,19 +588,21 @@ adj scan strt: %s
             for data in self.read_scans():
                 if header is None:
                     header = data
-                    when = data.index[0]
+                    when = pd.to_datetime(data.time.data[0])
                     base = when.replace(microsecond=0)
                     units = ('microseconds since %s' %
                              base.strftime("%Y-%m-%d %H:%M:%S+00:00"))
                     tfile = outpath.start(filespec, data)
-                ds = xr.Dataset()
+                ds = data
                 # numerous and varied attempts failed to get xarray to encode
                 # the time as microseconds since base, so do it manually.
-                ds.coords['time'] = (data.index - base).map(td_to_microseconds)
+                base = np.datetime64(base)
+                td = np.array([td_to_microseconds(t)
+                               for t in (data.time - base).data])
+                ds = ds.assign_coords(time=("time", td))
                 ds['time'].attrs['units'] = units
                 ds['time'].encoding = {'dtype': 'int64'}
-                for c in data.columns:
-                    ds[c] = ('time', data[c])
+                for c in data.data_vars.keys():
                     # use conventional netcdf and ISFS attributes
                     ds[c].attrs['units'] = 'V'
                     ds[c].attrs['long_name'] = f'{c} bridge voltage'
@@ -600,6 +610,7 @@ adj scan strt: %s
                     ds[c].attrs['short_name'] = f'Eb.{height}.{self.SITE}'
                     ds[c].attrs['site'] = self.SITE
                     ds[c].attrs['height'] = height
+                logger.debug("appended dataset for netcdf output: %s", ds)
                 datasets.append(ds)
                 last = data
 
@@ -607,7 +618,8 @@ adj scan strt: %s
                 ds = xr.concat(datasets, dim='time')
                 ds.to_netcdf(tfile.name)
                 # insert the file length into the final filename
-                minutes = self.get_period(header, last).total_seconds() // 60
+                minutes = self.get_period(header, last)
+                minutes = pd.to_timedelta(minutes).total_seconds() // 60
                 outpath.finish(minutes)
 
             if header is None:
@@ -657,9 +669,9 @@ def apply_args(hf: ReadHotfilm, argv: Optional[List[str]]):
         hf.select_channels(args.channels)
     hf.set_min_max_block_minutes(args.min, args.max)
     if args.begin:
-        hf.begin = iso_to_datetime(args.begin)
+        hf.begin = iso_to_datetime64(args.begin)
     if args.end:
-        hf.end = iso_to_datetime(args.end)
+        hf.end = iso_to_datetime64(args.end)
 
     hf.set_time_format(args.timeformat)
     hf.delay = args.delay

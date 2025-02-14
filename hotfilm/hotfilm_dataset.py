@@ -136,8 +136,8 @@ class HotfilmCalibration:
         logger.debug("plotting calibration curve: eb=%s, spd=%s",
                      self.eb, self.spd)
         logger.debug("a=%s, b=%s", self.a, self.b)
-        ebmin = self.eb.min().item()
-        ebmax = self.eb.max().item()
+        ebmin = self.eb.min().data
+        ebmax = self.eb.max().data
         logger.debug("min eb=%s, max eb=%s", ebmin, ebmax)
         eb = np.linspace(ebmin, ebmax, 100)
         spd = self.speed(eb)

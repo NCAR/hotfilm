@@ -7,6 +7,7 @@ from pathlib import Path
 import logging
 import datetime as dt
 import pandas as pd
+import numpy as np
 import xarray as xr
 import pytest
 
@@ -18,24 +19,28 @@ from dump_hotfilm import main
 logger = logging.getLogger(__name__)
 
 
+def ft(dt64):
+    return np.datetime_as_string(dt64, unit='us')
+
+
 def test_datetime_from_match():
     tests = {
         "2023 06 30 21:59:27.8075 200, 521    8000 1 2 3 4":
-        dt.datetime(2023, 6, 30, 21, 59, 27, 807500, dt.timezone.utc),
+        dt.datetime(2023, 6, 30, 21, 59, 27, 807500),
         "2023 06 30 21:59:27 200, 521    8000 1 2 3 4":
-        dt.datetime(2023, 6, 30, 21, 59, 27, 0, dt.timezone.utc),
+        dt.datetime(2023, 6, 30, 21, 59, 27, 0),
         "2023 06 30 21:59:27.0 200, 521    8000 1 2 3 4":
-        dt.datetime(2023, 6, 30, 21, 59, 27, 0, dt.timezone.utc),
+        dt.datetime(2023, 6, 30, 21, 59, 27, 0),
         "2023 07 20 01:02:04.3950 200, 521   8000 1 2 3 4":
-        dt.datetime(2023, 7, 20, 1, 2, 4, 395000, dt.timezone.utc),
+        dt.datetime(2023, 7, 20, 1, 2, 4, 395000),
         "2023 07 20 01:02:04.000002 200, 521   8000 1 2 3 4":
-        dt.datetime(2023, 7, 20, 1, 2, 4, 2, dt.timezone.utc)
+        dt.datetime(2023, 7, 20, 1, 2, 4, 2)
     }
     hf = ReadHotfilm()
     for line, xwhen in tests.items():
         data = hf.parse_line(line)
         assert data is not None
-        assert data.index[0] == xwhen
+        assert data.time.data[0] == np.datetime64(xwhen)
 
 # flake8: noqa: E501
 _scan = """
@@ -45,22 +50,20 @@ _scan = """
 
 def test_parse_line():
     hf = ReadHotfilm()
-    data = hf.parse_line(_scan)
-    assert data is not None
-    logger.debug(data)
-    y = data['ch1']
-    x = data.index
-    y2 = data[data.columns[0]]
-    assert (y == y2).all()
+    ch1 = hf.parse_line(_scan)
+    assert ch1 is not None
+    logger.debug(ch1)
+    y = ch1.data
+    x = ch1.time.data
+    assert len(ch1) == 8
     assert len(x) == 8
     assert len(y) == 8
-    when: dt.datetime
-    when = x[0]
-    assert when.isoformat() == "2023-07-20T01:02:03.395000+00:00"
+    when = pd.to_datetime(x[0])
+    assert when.isoformat() == "2023-07-20T01:02:03.395000"
     assert when.strftime("%Y%m%d_%H%M%S") == "20230720_010203"
-    assert x[-1] == when + (7 * dt.timedelta(microseconds=125000))
-    assert y.iloc[0] == 2.4023
-    assert y.iloc[-1] == 2.4093
+    assert x[-1] == x[0] + (7 * np.timedelta64(125000, 'us'))
+    assert y.data[0] == 2.4023
+    assert y.data[-1] == 2.4093
 
 
 def test_get_period():
@@ -69,7 +72,7 @@ def test_get_period():
     period = hf.get_period(data)
     interval = hf.get_interval(data)
     assert interval == 125000
-    assert period.total_seconds() == 1
+    assert pd.to_timedelta(period).total_seconds() == 1
 
 
 _line1 = """
@@ -81,7 +84,7 @@ _line2 = """
 """.strip()
 
 
-def check_and_append(hf: ReadHotfilm, data: pd.DataFrame, next: pd.DataFrame,
+def check_and_append(hf: ReadHotfilm, data: xr.Dataset, next: xr.Dataset,
                      xcont: bool, xadjust: int):
     """
     Test data and next for contiguousness and match result against xcont.  If
@@ -89,16 +92,15 @@ def check_and_append(hf: ReadHotfilm, data: pd.DataFrame, next: pd.DataFrame,
     """
     logger.debug("checking next scan %s contiguous: [%s, %s]",
                  "is" if xcont else "is NOT",
-                 next.index[0].isoformat(),
-                 next.index[-1].isoformat())
+                 ft(next.time[0]), ft(next.time[-1]))
     assert hf.is_contiguous(data, next) == xcont
     if xcont:
-        data = pd.concat([data, next])
-        logger.debug("after appending next, data frame is: [%s, %s]",
-                     data.index[0].isoformat(), data.index[-1].isoformat())
-        interval = dt.timedelta(microseconds=125000)
-        for i in range(1, len(data.index)):
-            assert data.index[i] - data.index[i-1] == interval
+        data = xr.merge([data, next])
+        logger.debug("after appending next, dataset is: [%s, %s]",
+                     ft(data.time[0]), ft(data.time[-1]))
+        interval = np.timedelta64(125000, 'us')
+        for i in range(1, len(data.time)):
+            assert data.time[i] - data.time[i-1] == interval
         assert hf.adjust_time == xadjust
     return data
 
@@ -106,35 +108,35 @@ def check_and_append(hf: ReadHotfilm, data: pd.DataFrame, next: pd.DataFrame,
 def test_is_contiguous():
     hf = ReadHotfilm()
     data = hf.parse_line(_line1)
-    xfirst = dt.datetime(2023, 7, 20, 1, 2, 3, 0, dt.timezone.utc)
-    assert data.index[0] == xfirst
+    xfirst = np.datetime64(dt.datetime(2023, 7, 20, 1, 2, 3, 0))
+    assert data.time.data[0] == xfirst
     # after the first scan adjust should still be zero.
     assert hf.adjust_time == 0
     next = hf.parse_line(_line2)
-    xfirst = dt.datetime(2023, 7, 20, 1, 2, 4, 0, dt.timezone.utc)
-    assert next.index[0] == xfirst
+    xfirst = np.datetime64(dt.datetime(2023, 7, 20, 1, 2, 4, 0))
+    assert next.time.data[0] == xfirst
     assert hf.adjust_time == 0
     logger.debug("test next follows at exactly the right time")
     data = check_and_append(hf, data, next, True, 0)
     logger.debug("next is shifted ahead by 2 intervals")
-    interval = dt.timedelta(microseconds=125000)
-    next.index += 2*interval + dt.timedelta(seconds=1)
+    interval = np.timedelta64(125000, 'us')
+    next['time'] = next.time + 2*interval + np.timedelta64(1, 's')
     # still contiguous, but next is shifted back
-    xadjust = -2*interval / dt.timedelta(microseconds=1)
+    xadjust = -2*interval / np.timedelta64(1, 'us')
     data = check_and_append(hf, data, next, True, xadjust)
     # if the next scan is exactly a second later, then that is like shifting 2
     # intervals relative to the previous scan, and the overall adjustment from
     # the first scan is back to 0.
     logger.debug("next follows 1 second later, shift is -250000")
-    next.index += dt.timedelta(seconds=1)
+    next['time'] = next.time + np.timedelta64(1, 's')
     xadjust = 0
     data = check_and_append(hf, data, next, True, xadjust)
     logger.debug("next is 100 usec earlier, shift should be -100")
-    next.index += dt.timedelta(microseconds=999900)
+    next['time'] = next.time + np.timedelta64(999900, 'us')
     xadjust += 100
     data = check_and_append(hf, data, next, True, xadjust)
     # finally, test that too large a shift triggers a reset
-    next.index += dt.timedelta(seconds=2)
+    next['time'] = next.time + np.timedelta64(2, 's')
     data = check_and_append(hf, data, next, False, xadjust)
 
 
@@ -147,14 +149,15 @@ def test_scan_skip():
     hf = ReadHotfilm()
     data = hf.parse_line(_scanfill)
     assert data is not None
-    assert hf.skip_scan(data)
+    ds = xr.Dataset({data.name: data})
+    assert hf.skip_scan(ds)
 
 
 def test_time_format():
     hf = ReadHotfilm()
     hf.timeformat = time_formatter.ISO
-    when = dt.datetime(2023, 7, 23, 2, 3, 4, 765430, dt.timezone.utc)
-    assert hf.format_time(when) == "2023-07-23T02:03:04.765430+00:00"
+    when = np.datetime64(dt.datetime(2023, 7, 23, 2, 3, 4, 765430))
+    assert hf.format_time(when) == "2023-07-23T02:03:04.765430"
     hf.set_time_format("%H:%M:%S.%f")
     assert hf.format_time(when) == "02:03:04.765430"
 
@@ -162,11 +165,11 @@ def test_time_format():
 def test_s_format():
     hf = ReadHotfilm()
     hf.timeformat = "%s.%f"
-    when = dt.datetime(2023, 8, 8, 18, 6, 37, 0, tzinfo=dt.timezone.utc)
-    epoch = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+    when = np.datetime64(dt.datetime(2023, 8, 8, 18, 6, 37, 0))
+    epoch = np.datetime64(dt.datetime(1970, 1, 1))
     assert hf.format_time(when) == "1691517997.000000"
-    assert (when - epoch).total_seconds() == 1691517997
-    when = dt.datetime(2023, 8, 8, 18, 6, 37, 999999, tzinfo=dt.timezone.utc)
+    assert pd.to_timedelta(when - epoch).total_seconds() == 1691517997
+    when = np.datetime64(dt.datetime(2023, 8, 8, 18, 6, 37, 999999))
     assert hf.format_time(when) == "1691517997.999999"
 
 
@@ -185,11 +188,11 @@ def test_get_block():
     hf.minblock = 0
     hf.line_iterator = iter(_block_lines)
     logger.debug("first get_block() call...")
-    frame = hf.get_block()
-    assert len(frame.index) == 24
+    ds = hf.get_block()
+    assert len(ds.time) == 24
     logger.debug("second get_block() call...")
-    frame = hf.get_block()
-    assert len(frame.index) == 16
+    ds = hf.get_block()
+    assert len(ds.time) == 16
 
 
 def test_short_blocks():
@@ -197,8 +200,8 @@ def test_short_blocks():
     hf.select_channels([1])
     hf.line_iterator = iter(_block_lines)
     logger.debug("first get_block() call...")
-    frame = hf.get_block()
-    assert frame is None
+    data = hf.get_block()
+    assert data is None
 
 
 def test_long_enough_blocks():
@@ -207,11 +210,12 @@ def test_long_enough_blocks():
     hf.minblock = 3
     hf.line_iterator = iter(_block_lines)
     logger.debug("first get_block() call...")
-    frame = hf.get_block()
-    assert len(frame.index) == 24
+    data = hf.get_block()
+    logger.debug("data returned: %s", repr(data))
+    assert len(data.time) == 24
     logger.debug("second get_block() call...")
-    frame = hf.get_block()
-    assert frame is None
+    data = hf.get_block()
+    assert data is None
 
 
 _skip_lines = """
@@ -229,15 +233,15 @@ def test_skip_blocks():
     hf.minblock = 1
     hf.line_iterator = iter(_skip_lines)
     logger.debug("first get_block() call...")
-    frame = hf.get_block()
+    ds = hf.get_block()
     # first block should break at the -9999
-    assert frame is not None and len(frame) == 24
-    assert frame['ch1'].iloc[23] == 2.4
+    assert ds is not None and len(ds.time) == 24
+    assert ds['ch1'].data[23] == 2.4
     logger.debug("second get_block() call...")
-    frame = hf.get_block()
+    ds = hf.get_block()
     # should still get a block with one scan
-    assert frame is not None and len(frame) == 8
-    assert frame['ch1'].iloc[7] == 2.8
+    assert ds is not None and len(ds.time) == 8
+    assert ds['ch1'].data[7] == 2.8
 
 
 def test_get_minutes():
