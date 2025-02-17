@@ -3,6 +3,7 @@ Tests for ReadHotfilm
 """
 
 import subprocess as sp
+import contextlib
 from pathlib import Path
 import logging
 import datetime as dt
@@ -280,20 +281,21 @@ def test_td_to_microseconds():
 
 
 _this_dir = Path(__file__).parent
-_test_data_dir = _this_dir / "test_data"
-_test_out_dir = _this_dir / "test_out"
+_test_data_dir = Path("test_data")
+_test_out_dir = Path("test_out")
 
 def test_netcdf_output():
     datfile = _test_data_dir / "channel2_20230804_180000_05.dat"
-    _test_out_dir.mkdir(exist_ok=True)
-    xout = _test_out_dir / "channel2_20230804_180000_005.nc"
+    (_this_dir / _test_out_dir).mkdir(exist_ok=True)
+    xout = _this_dir / _test_out_dir / "channel2_20230804_180000_005.nc"
     xout.unlink(missing_ok=True)
     args = ["--netcdf", _test_out_dir / "channel2_%Y%m%d_%H%M%S.nc",
             "--channel", "2", datfile]
     args = [str(arg) for arg in args]
     logger.debug("dumping: %s", " ".join(args))
     try:
-        main(args)
+        with contextlib.chdir(_this_dir):
+            main(['dump_hotfilm.py'] + args)
     except FileNotFoundError as fe:
         if fe.filename == "data_dump":
             pytest.xfail("data_dump not found.")

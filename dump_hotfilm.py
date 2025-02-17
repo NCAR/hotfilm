@@ -121,7 +121,7 @@ class OutputPath:
         when = pd.to_datetime(data.time.data[0])
         path = Path(when.strftime(filespec))
         tfile = tempfile.NamedTemporaryFile(dir=str(path.parent),
-                                            prefix=str(path)+'.',
+                                            prefix=str(path.name)+'.',
                                             delete=False)
         logger.info("starting file: %s", tfile.name)
         self.when = when
@@ -159,6 +159,7 @@ class ReadHotfilm:
     adjust_time: int
     scan: xr.Dataset
     next_scan: xr.Dataset
+    command_line: str
 
     # really these should come from the xml, but hardcode for now
     HEIGHTS = {
@@ -195,6 +196,11 @@ class ReadHotfilm:
         # iterator which returns the next data line
         self.line_iterator = None
         self.precision = 8
+        self.command_line = None
+
+    def set_command_line(self, argv):
+        self.command_line = " ".join([f"'{arg}'" if ' ' in arg else arg
+                                      for arg in argv])
 
     def set_time_format(self, fspec):
         """
@@ -592,6 +598,8 @@ adj scan strt: %s
             ds[c].attrs['short_name'] = f'Eb.{height}.{self.SITE}'
             ds[c].attrs['site'] = self.SITE
             ds[c].attrs['height'] = height
+        if self.command_line:
+            ds.attrs['history'] = self.command_line
         return ds
 
     def write_netcdf_file(self, filespec: str):
@@ -678,7 +686,9 @@ def apply_args(hf: ReadHotfilm, argv: Optional[List[str]]):
 
 def main(argv: Optional[List[str]]):
     hf = ReadHotfilm()
-    args = apply_args(hf, argv)
+    args = apply_args(hf, argv[1:])
+    # record the command line arguments for the history attribute
+    hf.set_command_line(argv)
     hf.start()
     # netcdf takes precedence over text default
     if args.netcdf:
@@ -690,4 +700,4 @@ def main(argv: Optional[List[str]]):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    main(sys.argv)
