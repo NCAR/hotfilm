@@ -569,6 +569,31 @@ adj scan strt: %s
             if header is None:
                 break
 
+    def _add_netcdf_attrs(self, ds: xr.Dataset) -> xr.Dataset:
+        """
+        Setup time coordinate and data variable attributes for netcdf output.
+        """
+        # numerous and varied attempts failed to get xarray to encode
+        # the time as microseconds since base, so do it manually.
+        when = pd.to_datetime(ds.time.data[0])
+        base = when.replace(microsecond=0)
+        units = ('microseconds since %s' %
+                 base.strftime("%Y-%m-%d %H:%M:%S+00:00"))
+        base = np.datetime64(base)
+        td = np.array([td_to_microseconds(t) for t in (ds.time - base).data])
+        ds = ds.assign_coords(time=("time", td))
+        ds['time'].attrs['units'] = units
+        ds['time'].encoding = {'dtype': 'int64'}
+        for c in ds.data_vars.keys():
+            # use conventional netcdf and ISFS attributes
+            ds[c].attrs['units'] = 'V'
+            ds[c].attrs['long_name'] = f'{c} bridge voltage'
+            height = self.HEIGHTS[c]
+            ds[c].attrs['short_name'] = f'Eb.{height}.{self.SITE}'
+            ds[c].attrs['site'] = self.SITE
+            ds[c].attrs['height'] = height
+        return ds
+
     def write_netcdf_file(self, filespec: str):
         """
         Like write_text_file(), but write to a netcdf file.  Create a time
@@ -578,51 +603,24 @@ adj scan strt: %s
         while True:
             outpath = OutputPath()
             tfile = None
-            header = None
-            last = None
             datasets = []
-            when: dt.datetime = None
-            base: dt.datetime = None
-            # create a Dataset for each block, then concatenate them to write
-            # them to a netcdf file.
+            # create a Dataset for each block, then concatenate and write them
+            # to a netcdf file.
             for data in self.read_scans():
-                if header is None:
-                    header = data
-                    when = pd.to_datetime(data.time.data[0])
-                    base = when.replace(microsecond=0)
-                    units = ('microseconds since %s' %
-                             base.strftime("%Y-%m-%d %H:%M:%S+00:00"))
+                if tfile is None:
                     tfile = outpath.start(filespec, data)
-                ds = data
-                # numerous and varied attempts failed to get xarray to encode
-                # the time as microseconds since base, so do it manually.
-                base = np.datetime64(base)
-                td = np.array([td_to_microseconds(t)
-                               for t in (data.time - base).data])
-                ds = ds.assign_coords(time=("time", td))
-                ds['time'].attrs['units'] = units
-                ds['time'].encoding = {'dtype': 'int64'}
-                for c in data.data_vars.keys():
-                    # use conventional netcdf and ISFS attributes
-                    ds[c].attrs['units'] = 'V'
-                    ds[c].attrs['long_name'] = f'{c} bridge voltage'
-                    height = self.HEIGHTS[c]
-                    ds[c].attrs['short_name'] = f'Eb.{height}.{self.SITE}'
-                    ds[c].attrs['site'] = self.SITE
-                    ds[c].attrs['height'] = height
-                logger.debug("appended dataset for netcdf output: %s", ds)
-                datasets.append(ds)
-                last = data
+                datasets.append(data)
 
             if tfile:
                 ds = xr.concat(datasets, dim='time')
-                ds.to_netcdf(tfile.name)
-                # insert the file length into the final filename
-                minutes = self.get_period(header, last)
+                # get length in minutes before time coordinate is converted
+                minutes = self.get_period(ds)
                 minutes = pd.to_timedelta(minutes).total_seconds() // 60
+                ds = self._add_netcdf_attrs(ds)
+                ds.to_netcdf(tfile.name)
                 outpath.finish(minutes)
 
-            if header is None:
+            if tfile is None:
                 break
 
 
