@@ -95,6 +95,15 @@ class IsfsDataset:
         dsv = self.reshape_variable(dsv)
         return dsv
 
+    def get_wind_variables(self, variable: xr.DataArray) -> tuple[xr.DataArray]:
+        """
+        Given a variable with a height and site attribute, return the sonic
+        wind component variables for that height.
+        """
+        height = variable.attrs['height'].replace('.', '_')
+        site = variable.attrs['site']
+        return [self.get_variable(f'{c}_{height}_{site}') for c in 'uvw']
+
     def reshape_variable(self, dsv: xr.DataArray):
         """
         Given a time series with a sub-sample dimension, reshape it to a 1D
@@ -111,6 +120,16 @@ class IsfsDataset:
                                 attrs=dsv.attrs)
         logger.debug("reshaped %s: %s", dsv.name, reshaped)
         return reshaped
+
+    def get_speed(self, u: xr.DataArray, w: xr.DataArray) -> xr.DataArray:
+        """
+        Return speed DataArray as the norm of the two wind vector components.
+        """
+        spd = np.sqrt(u**2 + w**2)
+        uname = u.attrs['short_name']
+        wname = w.attrs['short_name']
+        spd.attrs['long_name'] = f'|({uname},{wname})| (m/s)'
+        return spd
 
     def close(self):
         self.dataset.close()

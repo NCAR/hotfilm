@@ -1,8 +1,6 @@
 """
 Class and functions to read and process hotfilm netcdf data.
 """
-
-
 #     Spd = c(0,2.1,5.0,5.3,9.6,10.3,14.1,18.5,20.5,25.2)
 #     Eb = c(1.495, 2.03, 2.33, 2.37, 2.61, 2.64, 2.80, 2.95, 3.00, 3.13)
 #     Eb = Eb*gain
@@ -18,14 +16,13 @@ import logging
 import xarray as xr
 import numpy as np
 from numpy.polynomial import Polynomial
-import matplotlib.pyplot as plt
 import matplotlib.axes
 
 
 logger = logging.getLogger(__name__)
 
 
-def _dt_string(dt: np.datetime64) -> str:
+def dt_string(dt: np.datetime64) -> str:
     return np.datetime_as_string(dt, unit='s')
 
 
@@ -48,6 +45,15 @@ def hotfilm_voltage_to_speed(eb, a, b):
     return spd
 
 
+def resample_mean(da: xr.DataArray, period: str) -> xr.DataArray:
+    """
+    Resample the given DataArray to the mean over the given period, assuming
+    only that time is the first dimension but not necessarily named 'time'.
+    """
+    indexer = {da.dims[0]: period}
+    return da.resample(**indexer).mean(skipna=True, keep_attrs=True)
+
+
 class HotfilmCalibration:
     """
     Create a hot film calibration and manage metadata for it.
@@ -68,6 +74,7 @@ class HotfilmCalibration:
                   begin: np.datetime64, end: np.datetime64):
         """
         """
+        logger.debug("calibrating from %s to %s", begin, end)
         spd = spd.sel(**{spd.dims[0]: slice(begin, end)})
         spd = resample_mean(spd, self.mean_interval)
         eb = eb.sel(**{eb.dims[0]: slice(begin, end)})
@@ -151,11 +158,13 @@ class HotfilmCalibration:
         dtime = self.eb.coords[self.eb.dims[0]]
         first = dtime.data[0]
         last = dtime.data[-1]
-        ax.set_title(f"{_dt_string(first)} to {_dt_string(last)}")
+        ax.set_title(f"{dt_string(first)} to {dt_string(last)}")
         ax.legend()
 
 
 class HotfilmDataset:
+
+    HEIGHTS = {'ch0': '0.5m', 'ch1': '1m', 'ch2': '2m', 'ch3': '4m'}
 
     def __init__(self):
         self.dataset = None
@@ -170,85 +179,16 @@ class HotfilmDataset:
                       self.timev[0], self.timev[-1])
         return self
 
-    def create_calibration(self, spd: xr.DataArray,
-                           begin: np.datetime64, end: np.datetime64,
-                           mean_interval: np.timedelta64):
-        """
-        Given a DataArray of wind speeds, such as a sonic anemometer wind
-        speed variable from an ISFS dataset, compute mean voltages and speeds
-        over the given time period and use them to create a
-        HotfilmCalibration.  Return the calibration.
-        """
-        spd.resample(time='5min').mean()
+    def get_variable(self, name: str) -> xr.DataArray:
+        eb = self.dataset[name]
+        # this should have been in the dataset, so hardcode it until it is
+        if 'long_name' not in eb.attrs:
+            eb.attrs['long_name'] = f'{eb.name} bridge voltage (V)'
+        if 'site' not in eb.attrs:
+            eb.attrs['site'] = 't0'
+        if 'height' not in eb.attrs:
+            eb.attrs['height'] = self.HEIGHTS[eb.name]
+        return eb
 
     def close(self):
         self.dataset.close()
-
-
-import sys
-from isfs_dataset import IsfsDataset, rdatetime
-
-
-def resample_mean(da: xr.DataArray, period: str) -> xr.DataArray:
-    """
-    Resample the given DataArray to the mean over the given period, assuming
-    only that time is the first dimension but not necessarily named 'time'.
-    """
-    indexer = {da.dims[0]: period}
-    return da.resample(**indexer).mean(skipna=True, keep_attrs=True)
-
-
-if __name__ == "__main__":
-    logger.setLevel(logging.DEBUG)
-    filename = sys.argv[1]
-    films = HotfilmDataset().open(filename)
-    sonics = IsfsDataset().open(sys.argv[2])
-    logger.debug("\nhotfilm.timev=%s", films.timev)
-    calperiod = np.timedelta64(300, 's')
-    # start with first time in hotfilm dataset rounded to cal period.
-    first = films.timev.data[0]
-    last = films.timev.data[-1]
-    logger.debug("first=%s, type=%s", first, type(first))
-    begin = rdatetime(first, calperiod)
-    end = rdatetime(last, calperiod)
-    u = sonics.get_variable("u_0_5m_t0")
-    w = sonics.get_variable("w_0_5m_t0")
-    spd = np.sqrt(u**2 + w**2)
-    uname = u.attrs['short_name']
-    wname = w.attrs['short_name']
-    spd.attrs['long_name'] = f'|({uname},{wname})| (m/s)'
-    logger.debug("\nspd=%s", spd)
-    eb = films.dataset['ch0']
-    # this should have been in the dataset, so hardcode it until it is
-    eb.attrs['long_name'] = f'{eb.name} bridge voltage (V)'
-    logger.debug("\neb=%s", eb)
-    cals = []
-    # Panel of calibration plots
-    nrows, ncols = 2, 3
-    fig, axs = plt.subplots(nrows, ncols)
-    nplots = nrows * ncols
-
-    def subplot(iplot):
-        if nrows * ncols == 1:
-            return axs
-        return axs[iplot // ncols, iplot % ncols]
-
-    title = f'Calibrations from {_dt_string(begin)} to {_dt_string(end)}'
-    iplot = 0
-    while begin < end and iplot < nplots:
-        next_time = begin + calperiod
-        logger.debug("calibrating from %s to %s", begin, next_time)
-        # select voltage and wind speeds
-        # use open-ended slice for next_time
-        end_slice = next_time - np.timedelta64(1, 'ns')
-        try:
-            hfc = HotfilmCalibration().calibrate(spd, eb, begin, end_slice)
-            hfc.plot(subplot(iplot))
-            iplot += 1
-            cals.append(hfc)
-        except Exception as e:
-            logger.error(f"calibration failed: {e}")
-        begin = next_time
-    films.close()
-    fig.suptitle(title, fontsize=16)
-    plt.show()
