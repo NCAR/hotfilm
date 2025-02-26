@@ -1,11 +1,13 @@
 #! /bin/env python
 """
 Given a hotfilm voltage dataset and an ISFS dataset with sonic wind component
-variables, calculate calibration coefficients for the hotfilm channel voltages
-and compute wind speed from them.
+variables, calibrate the hotfilm voltages against sonic wind speed, then write
+the computed wind speeds to netcdf, or plot the calibrations.
 """
 import sys
 import logging
+import argparse
+
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -39,8 +41,22 @@ def plot_calibrations(nrows, ncols, cals: list[HotfilmCalibration]):
 
 
 def main():
-    logging.basicConfig(level=logging.DEBUG)
-    filename = sys.argv[1]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('hotfilms',
+                        help='NetCDF file with hotfilm voltages')
+    parser.add_argument('sonics',
+                        help='ISFS NetCDF file with sonic wind components')
+    parser.add_argument('--plot', action='store_true',
+                        help='Plot calibrations instead of writing to NetCDF')
+    parser.add_argument('--netcdf',
+                        help="Filename specifier for output NetCDF",
+                        default='hotfilm_wind_speed_%Y%m%d_%H%M%S.nc')
+    parser.add_argument('--log', help='Log level', default='info')
+
+    args = parser.parse_args()
+    level = logging.getLevelNamesMapping()[args.log.upper()]
+    logging.basicConfig(level=level)
+    filename = args.hotfilms
     films = HotfilmDataset().open(filename)
     logger.debug("\nhotfilm.timev=%s", films.timev)
 
@@ -51,13 +67,18 @@ def main():
     logger.debug("first=%s, type=%s", first, type(first))
     begin = rdatetime(first, calperiod)
     end = rdatetime(last, calperiod)
-    sonics = IsfsDataset().open(sys.argv[2])
+    sonics = IsfsDataset().open(args.sonics)
     cals = []
 
     speeds = HotfilmWindSpeedDataset()
 
     # Compute calibrations
+    sonics_end = sonics.timev.data[-1]
     while begin < end:
+        if begin > sonics_end:
+            logger.warning(f"No sonic wind speed data past "
+                           f"{dt_string(sonics_end)}.")
+            break
         next_time = begin + calperiod
         # select voltage and wind speeds
         # use open-ended slice for next_time
@@ -70,7 +91,8 @@ def main():
                 hfc.calibrate_winds(sonics, eb, begin, end_slice)
                 cals.append(hfc)
             except Exception as e:
-                logger.error(f"calibration failed: {e}")
+                logger.error(f"calibration failed for {eb.name} "
+                             f"at {dt_string(begin)}: {e}")
                 continue
             hfspd = hfc.convert_to_wind_speed(eb)
             logger.debug("hfspd:\n%s", hfspd)
@@ -78,9 +100,11 @@ def main():
             speeds.add_calibration(hfc.as_dataset())
         begin = next_time
 
-    # plot_calibrations(2, 4, cals)
     logger.debug("%d calibrations done.", len(cals))
-    speeds.save("hotfilm_wind_speed_%Y%m%d_%H%M%S.nc")
+    if args.plot:
+        plot_calibrations(2, 4, cals)
+    else:
+        speeds.save(args.netcdf)
     films.close()
 
 

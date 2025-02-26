@@ -127,7 +127,11 @@ class HotfilmCalibration:
         """
         logger.debug("\neb=%s", eb)
         logger.debug("calibrating from %s to %s", begin, end)
+        if len(spd) < 2:
+            raise Exception(f"too few speed points: {len(spd)}")
         spd = resample_mean(spd, self.mean_interval)
+        if len(eb) < 2:
+            raise Exception(f"too few voltage points: {len(eb)}")
         eb = eb.sel(**{eb.dims[0]: slice(begin, end)})
         eb = resample_mean(eb, self.mean_interval)
         self.begin, self.end = begin, end
@@ -160,11 +164,9 @@ class HotfilmCalibration:
         logger.debug("\nmask=%s", mask)
         spd = spd[mask]
         eb = eb[mask]
-        if len(spd) < 2 or len(eb) < 2:
-            raise Exception("too few data points to calibrate")
-        elif len(spd) != len(eb):
-            raise Exception(f"num spd points {len(spd)} does not "
-                            f"equal num eb points {len(eb)}")
+        if len(spd) < 2 or len(eb) < 2 or len(spd) != len(eb):
+            raise Exception(f"too few or unequal good data points: "
+                            f"{len(spd)} spd, {len(eb)} eb")
         self.eb = eb
         self.spd = spd
         pfit = Polynomial.fit(spd**0.45, eb**2, 1)
@@ -195,7 +197,7 @@ class HotfilmCalibration:
         eb = eb.sel(**{eb.dims[0]: slice(self.begin, self.end)})
         spd = self.speed(eb)
         spd.name = 'spdhf_%(height)s_%(site)s' % eb.attrs
-        long_name = "hotfilm wind speed in vertical plane orthogonal to hotfilm"
+        long_name = "wind speed orthogonal to hotfilm"
         spd.attrs['long_name'] = long_name
         spd.attrs['units'] = "m/s"
         spd.attrs['site'] = eb.attrs['site']
