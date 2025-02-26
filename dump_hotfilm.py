@@ -2,8 +2,6 @@
 
 import sys
 import subprocess as sp
-from pathlib import Path
-import tempfile
 import argparse
 import time
 import logging
@@ -12,7 +10,9 @@ import datetime as dt
 import pandas as pd
 import numpy as np
 import xarray as xr
-
+from hotfilm.outout_path import OutputPath
+from hotfilm.utils import convert_time_coordinate
+from hotfilm.utils import td_to_microseconds
 
 from typing import Generator, Union
 from typing import Optional, List
@@ -46,17 +46,6 @@ def datetime_from_match(match) -> np.datetime64:
 
 def ft(dt64):
     return np.datetime_as_string(dt64, unit='us')
-
-
-_microseconds_per_seconds = 1000000
-_microseconds_per_day = 24*60*60*_microseconds_per_seconds
-
-
-def td_to_microseconds(td64: np.timedelta64) -> int:
-    td = pd.to_timedelta(td64)
-    return (td.days * _microseconds_per_day +
-            td.seconds * _microseconds_per_seconds +
-            td.microseconds)
 
 
 class time_formatter:
@@ -109,38 +98,6 @@ class time_formatter:
     def __call__(self, when):
         return self.formatter(when)
 
-
-class OutputPath:
-
-    def __init__(self):
-        self.when = None
-        self.path = None
-        self.tfile = None
-
-    def start(self, filespec: str, data: xr.Dataset):
-        when = pd.to_datetime(data.time.data[0])
-        path = Path(when.strftime(filespec))
-        tfile = tempfile.NamedTemporaryFile(dir=str(path.parent),
-                                            prefix=str(path.name)+'.',
-                                            delete=False)
-        logger.info("starting file: %s", tfile.name)
-        self.when = when
-        self.path = path
-        self.tfile = tfile
-        return tfile
-
-    def finish(self, minutes: int):
-        path = self.path
-        fpath = path.stem + ("_%03d" % (minutes)) + path.suffix
-        fpath = Path(self.tfile.name).parent / fpath
-        logger.info("file finished with %d mins, renaming: %s",
-                    minutes, fpath)
-        fpath = Path(self.tfile.name).rename(fpath)
-        # the files should not need to be writable
-        fpath.chmod(0o444)
-        self.tfile = None
-        self.path = None
-        self.when = None
 
 
 def iso_to_datetime64(iso: str) -> np.datetime64:
@@ -579,17 +536,7 @@ adj scan strt: %s
         """
         Setup time coordinate and data variable attributes for netcdf output.
         """
-        # numerous and varied attempts failed to get xarray to encode
-        # the time as microseconds since base, so do it manually.
-        when = pd.to_datetime(ds.time.data[0])
-        base = when.replace(microsecond=0)
-        units = ('microseconds since %s' %
-                 base.strftime("%Y-%m-%d %H:%M:%S+00:00"))
-        base = np.datetime64(base)
-        td = np.array([td_to_microseconds(t) for t in (ds.time - base).data])
-        ds = ds.assign_coords(time=("time", td))
-        ds['time'].attrs['units'] = units
-        ds['time'].encoding = {'dtype': 'int64'}
+        ds = convert_time_coordinate(ds, ds.time)
         for c in ds.data_vars.keys():
             # use conventional netcdf and ISFS attributes
             ds[c].attrs['units'] = 'V'

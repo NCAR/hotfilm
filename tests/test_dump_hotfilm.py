@@ -14,7 +14,7 @@ import pytest
 
 from dump_hotfilm import ReadHotfilm
 from dump_hotfilm import time_formatter
-from dump_hotfilm import td_to_microseconds
+from hotfilm.utils import td_to_microseconds
 from dump_hotfilm import main
 
 logger = logging.getLogger(__name__)
