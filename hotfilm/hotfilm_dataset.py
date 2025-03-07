@@ -60,59 +60,48 @@ class HotfilmCalibration:
     """
     Create a hot film calibration and manage metadata for it.
     """
-    CALIBRATION_TIME = 'calibration_begin_time'
+    name: str
+    _num_points: int
     a: float
     b: float
-    eb: xr.DataArray
-    spd: xr.DataArray
+    mean_interval_seconds: int
+    period_seconds: int
+    begin: np.datetime64
+    end: np.datetime64
 
     def __init__(self):
+        self.name = None
         self.eb = None
         self.spd = None
+        self._num_points = None
         self.a = None
         self.b = None
-        self.mean_interval = '1s'
+        self.mean_interval_seconds = 1
+        self.period_seconds = 300
         self.begin = None
-        self.end = None
 
-    def as_dataset(self) -> xr.Dataset:
-        """
-        Return a Dataset with variables for the coefficients and a time
-        coordinate.
-        """
-        ds = xr.Dataset()
-        name = self.eb.name
-        timed = xr.DataArray(name=self.CALIBRATION_TIME,
-                             data=[self.begin],
-                             dims=[self.CALIBRATION_TIME],
-                             attrs={'long_name':
-                                    'Calibration period begin time',
-                                    'period': '300s',
-                                    'mean_interval': self.mean_interval})
+    def get_name(self):
+        return self.name
 
-        long_name = "first-degree coefficient b: eb^2 = a + b * spd^0.45"
-        units = "V**2"
-        a = xr.DataArray(name=f'a_{name}', data=[self.a],
-                         dims=[self.CALIBRATION_TIME],
-                         coords={timed.name: timed},
-                         attrs={'long_name': long_name, 'units': units})
-        long_name = "zero-degree coefficient a: eb^2 = a + b * spd^0.45"
-        units = "V**2 * (m/s)**-0.45"
-        b = xr.DataArray(name=f'b_{name}', data=[self.b],
-                         coords={timed.name: timed},
-                         dims=[self.CALIBRATION_TIME],
-                         attrs={'long_name': long_name, 'units': units})
-        ds = xr.Dataset({a.name: a, b.name: b})
-        return ds
+    def get_end_time(self, begin: np.datetime64) -> np.datetime64:
+        """
+        Return the end time of the calibration period, given the start time.
+        """
+        # use open-ended end time by subtracting 1 nanosecond
+        period = np.timedelta64(self.period_seconds, 's')
+        end = begin + period - np.timedelta64(1, 'ns')
+        return end
 
     def calibrate_winds(self, sonics: IsfsDataset, eb: xr.DataArray,
-                        begin: np.datetime64, end: np.datetime64):
+                        begin: np.datetime64, period: np.timedelta64):
         """
         Using the sonic wind component variables from @p sonics and the
         hotfilm voltage variable @p eb, calibrate the voltages with the wind
         speeds.
         """
-        u, _, w = sonics.get_wind_variables(eb)
+        self.period_seconds = period.astype('timedelta64[s]').astype(int)
+        end = self.get_end_time(begin)
+        u, w = sonics.get_wind_variables(eb, 'uw')
         u = u.sel(**{u.dims[0]: slice(begin, end)})
         w = w.sel(**{w.dims[0]: slice(begin, end)})
         spd = sonics.get_speed(u, w)
@@ -121,20 +110,19 @@ class HotfilmCalibration:
     def calibrate(self, spd: xr.DataArray, eb: xr.DataArray,
                   begin: np.datetime64, end: np.datetime64):
         """
-        Given the hotfilm bridge voltage data and a time period, compute a
-        calibration by fitting the voltage to the corresponding sonic wind
-        speed.
+        Compute a calibration by fitting the voltage to the wind speed.
         """
+        self.name = eb.name
         logger.debug("\neb=%s", eb)
         logger.debug("calibrating from %s to %s", begin, end)
         if len(spd) < 2:
             raise Exception(f"too few speed points: {len(spd)}")
-        spd = resample_mean(spd, self.mean_interval)
+        spd = resample_mean(spd, f"{self.mean_interval_seconds}s")
         if len(eb) < 2:
             raise Exception(f"too few voltage points: {len(eb)}")
         eb = eb.sel(**{eb.dims[0]: slice(begin, end)})
-        eb = resample_mean(eb, self.mean_interval)
-        self.begin, self.end = begin, end
+        eb = resample_mean(eb, f"{self.mean_interval_seconds}s")
+        self.begin = begin
         return self.fit(spd, eb)
 
     def fit(self, spd: xr.DataArray, eb: xr.DataArray):
@@ -167,6 +155,10 @@ class HotfilmCalibration:
         if len(spd) < 2 or len(eb) < 2 or len(spd) != len(eb):
             raise Exception(f"too few or unequal good data points: "
                             f"{len(spd)} spd, {len(eb)} eb")
+        ln = f'{eb.attrs["long_name"]} ({self.mean_interval_seconds}s mean)'
+        eb.attrs['long_name'] = ln
+        ln = f'{spd.attrs["long_name"]} ({self.mean_interval_seconds}s mean)'
+        spd.attrs['long_name'] = ln
         self.eb = eb
         self.spd = spd
         pfit = Polynomial.fit(spd**0.45, eb**2, 1)
@@ -174,6 +166,7 @@ class HotfilmCalibration:
                      pfit, pfit.window, pfit.domain)
         pfit = pfit.convert()
         self.a, self.b = pfit.coef[0:2]
+        self._num_points = len(eb)
         logger.debug("polynomial converted: a=%.2f, b=%.2f, %s, "
                      "window=%s, domain=%s",
                      self.a, self.b, pfit, pfit.window, pfit.domain)
@@ -181,7 +174,7 @@ class HotfilmCalibration:
 
     def num_points(self):
         "Return the number of points used in this calibration."
-        return len(self.eb)
+        return self._num_points
 
     def speed(self, eb):
         """
@@ -190,40 +183,29 @@ class HotfilmCalibration:
         """
         return hotfilm_voltage_to_speed(eb, self.a, self.b)
 
-    def convert_to_wind_speed(self, eb: xr.DataArray) -> xr.DataArray:
-        """
-        Return a DataArray for the voltages converted to wind speeds.
-        """
-        eb = eb.sel(**{eb.dims[0]: slice(self.begin, self.end)})
-        spd = self.speed(eb)
-        spd.name = 'spdhf_%(height)s_%(site)s' % eb.attrs
-        long_name = "wind speed orthogonal to hotfilm"
-        spd.attrs['long_name'] = long_name
-        spd.attrs['units'] = "m/s"
-        spd.attrs['site'] = eb.attrs['site']
-        spd.attrs['height'] = eb.attrs['height']
-        return spd
-
     def plot(self, ax: matplotlib.axes.Axes):
         """
         Plot the calibration curve on the given axes.
         """
-        logger.debug("plotting calibration curve: eb=%s, spd=%s",
-                     self.eb, self.spd)
+        # get the speed variable and convert it back to voltages
+        spd = self.spd
+        eb = self.eb
+        logger.debug("plotting calibration curve:\n-->eb=%s\n-->spd=%s",
+                     eb, spd)
         logger.debug("a=%s, b=%s", self.a, self.b)
-        ebmin = self.eb.min().data
-        ebmax = self.eb.max().data
+        ebmin = eb.min().data
+        ebmax = eb.max().data
         logger.debug("min eb=%s, max eb=%s", ebmin, ebmax)
-        eb = np.linspace(ebmin, ebmax, 100)
-        spd = self.speed(eb)
+        ebline = np.linspace(ebmin, ebmax, 100)
+        spdline = self.speed(ebline)
         label = f'Fit: Spd^0.45 = (eb^2 - {self.a:.2f})/{self.b:.2f})'
         # plot the calibration curve
-        ax.plot(spd, eb, color='red', label=label)
+        ax.plot(spdline, ebline, color='red', label=label)
         # plot the data
-        ax.scatter(self.spd, self.eb)
-        ax.set_xlabel(f"{self.spd.attrs['long_name']}")
-        ax.set_ylabel(f"{self.eb.attrs['long_name']}")
-        dtime = self.eb.coords[self.eb.dims[0]]
+        ax.scatter(spd, eb)
+        ax.set_xlabel(f"{spd.name} ({spd.attrs['units']})")
+        ax.set_ylabel(f"{eb.name} ({eb.attrs['units']})")
+        dtime = eb.coords[eb.dims[0]]
         first = dtime.data[0]
         ax.set_title(f"{dt_string(first)}")
         ax.legend()
@@ -250,7 +232,7 @@ class HotfilmDataset:
         eb = self.dataset[name]
         # this should have been in the dataset, so hardcode it until it is
         if 'long_name' not in eb.attrs:
-            eb.attrs['long_name'] = f'{eb.name} bridge voltage (V)'
+            eb.attrs['long_name'] = f'{eb.name} bridge voltage'
         if 'site' not in eb.attrs:
             eb.attrs['site'] = 't0'
         if 'height' not in eb.attrs:
@@ -266,6 +248,7 @@ class HotfilmWindSpeedDataset:
     Wrapper for a xarray.Dataset which contains hotfilm wind speeds calibrated
     from hotfilm bridge voltages.
     """
+    CALIBRATION_TIME = 'calibration_time'
 
     def __init__(self):
         """
@@ -273,20 +256,56 @@ class HotfilmWindSpeedDataset:
         """
         self.dataset = xr.Dataset()
 
-    def add_wind_speed(self, spd: xr.DataArray):
+    def add_calibration(self, hfc: HotfilmCalibration):
         """
-        Merge a hotfilm wind speed variable into the dataset.
+        Create a Dataset with variables for the coefficients and a time
+        coordinate, and add it to this Dataset.
         """
+        ds = xr.Dataset()
+        name = hfc.get_name()
+        attrs = {'long_name': 'Calibration period begin time',
+                 'period_seconds': hfc.period_seconds,
+                 'mean_interval_seconds': hfc.mean_interval_seconds}
+        timed = xr.DataArray(name=self.CALIBRATION_TIME,
+                             data=[hfc.begin],
+                             dims=[self.CALIBRATION_TIME],
+                             attrs=attrs)
+
+        long_name = "first-degree coefficient b: eb^2=a+b*spd^0.45"
+        units = "V^2"
+        a = xr.DataArray(name=f'a_{name}', data=[hfc.a],
+                         dims=[self.CALIBRATION_TIME],
+                         coords={timed.name: timed},
+                         attrs={'long_name': long_name, 'units': units})
+        long_name = "zero-degree coefficient a: eb^2=a+b*spd^0.45"
+        units = "(V^2)(m/s)^-0.45"
+        b = xr.DataArray(name=f'b_{name}', data=[hfc.b],
+                         coords={timed.name: timed},
+                         dims=[self.CALIBRATION_TIME],
+                         attrs={'long_name': long_name, 'units': units})
+        ds = xr.Dataset({a.name: a, b.name: b})
+        self.dataset = self.dataset.merge(ds)
+
+    def add_wind_speed(self, hfc: HotfilmCalibration, eb: xr.DataArray):
+        """
+        Use HotfilmCalibration @p hfc to convert a DataArray @p eb of voltages
+        to wind speed and add the wind speed variable to this Dataset.
+        """
+        begin = hfc.begin
+        end = hfc.get_end_time(begin)
+        eb = eb.sel(**{eb.dims[0]: slice(begin, end)})
+        spd = hfc.speed(eb)
+        spd.name = 'spdhf_%(height)s_%(site)s' % eb.attrs
+        long_name = "wind speed orthogonal to hotfilm"
+        spd.attrs['long_name'] = long_name
+        spd.attrs['units'] = "m/s"
+        spd.attrs['site'] = eb.attrs['site']
+        spd.attrs['height'] = eb.attrs['height']
+        spd.attrs['hotfilm_channel'] = eb.name
+        self.add_calibration(hfc)
         self.dataset = self.dataset.merge(spd)
         logger.debug("merged wind speed variable:\n%sresult:\n%s",
                      spd, self.dataset)
-
-    def add_calibration(self, calibration: xr.Dataset):
-        """
-        Add a calibration to the dataset.
-        """
-        self.dataset = self.dataset.merge(calibration)
-        return self.dataset
 
     def open(self, filename):
         self.dataset = xr.open_dataset(filename)
@@ -307,11 +326,48 @@ class HotfilmWindSpeedDataset:
         try:
             filename = outpath.start(fspec, self.dataset)
             ds = convert_time_coordinate(self.dataset, self.dataset.time)
-            cdim = ds.coords[HotfilmCalibration.CALIBRATION_TIME]
+            cdim = ds.coords[self.CALIBRATION_TIME]
             ds = convert_time_coordinate(ds, cdim)
             logger.debug("calling to_netcdf() on dataset:\n%s", ds)
             ds.to_netcdf(filename)
             filename = outpath.finish()
-            logging.info(f"Saved hotfilm wind speed dataset: {filename}")
+            logging.info(f"saved hotfilm wind speed dataset: {filename}")
         finally:
             outpath.remove()
+
+    def get_calibration_times(self) -> xr.DataArray:
+        """
+        Return the time coordinate of the calibrations in the dataset.
+        """
+        if self.dataset is None:
+            raise Exception("no dataset to get calibration times")
+        cdim = self.dataset[self.CALIBRATION_TIME]
+        return cdim
+
+    def get_speed_variables(self):
+        """
+        Return the wind speed variables in this dataset.
+        """
+        # the wind speeds are all the variables which start spdhf
+        return [self.dataset[name] for name in self.dataset.data_vars
+                if name.startswith('spdhf')]
+
+    def get_calibration(self, begin: np.datetime64,
+                        spd: xr.DataArray) -> HotfilmCalibration:
+        """
+        Given a wind speed variable, return the calibration for it.
+        """
+        name = spd.attrs['hotfilm_channel']
+        logger.debug("getting calibration for %s", name)
+        hfc = HotfilmCalibration()
+        hfc.name = name
+        loc = {self.CALIBRATION_TIME: begin}
+        hfc.a = self.dataset[f'a_{name}'].sel(**loc).data
+        hfc.b = self.dataset[f'b_{name}'].sel(**loc).data
+
+        # calibration parameters are attached to time coordinate attributes
+        ctime = self.dataset[self.CALIBRATION_TIME]
+        hfc.period_seconds = ctime.attrs['period_seconds']
+        hfc.mean_interval_seconds = ctime.attrs['mean_interval_seconds']
+        hfc.begin = begin
+        return hfc

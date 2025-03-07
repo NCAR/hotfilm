@@ -10,6 +10,7 @@ import argparse
 
 import matplotlib.pyplot as plt
 import numpy as np
+import xarray as xr
 
 from hotfilm.isfs_dataset import IsfsDataset, rdatetime
 from hotfilm.hotfilm_dataset import HotfilmDataset
@@ -41,6 +42,7 @@ def plot_calibrations(nrows, ncols, cals: list[HotfilmCalibration]):
 
 
 def main():
+    xr.set_options(display_expand_attrs=True, display_expand_data=True)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('hotfilms',
                         help='NetCDF file with hotfilm voltages')
@@ -51,6 +53,9 @@ def main():
     parser.add_argument('--netcdf',
                         help="Filename specifier for output NetCDF",
                         default='hotfilm_wind_speed_%Y%m%d_%H%M%S.nc')
+    parser.add_argument('--ncals', type=int,
+                        help='Number of calibrations to compute, else 0',
+                        default=0)
     parser.add_argument('--log', help='Log level', default='info')
 
     args = parser.parse_args()
@@ -73,34 +78,30 @@ def main():
     speeds = HotfilmWindSpeedDataset()
 
     # Compute calibrations
-    sonics_end = sonics.timev.data[-1]
-    while begin < end:
-        if begin > sonics_end:
+    end_sonics = sonics.timev.data[-1]
+    ncals = args.ncals
+    logger.info("begin=%s, end=%s, ncals=%d", begin, end, ncals)
+    while begin < end and (not ncals or len(cals) < ncals):
+        if begin > end_sonics:
             logger.warning(f"No sonic wind speed data past "
-                           f"{dt_string(sonics_end)}.")
+                           f"{dt_string(end_sonics)}.")
             break
-        next_time = begin + calperiod
-        # select voltage and wind speeds
-        # use open-ended slice for next_time
-        end_slice = next_time - np.timedelta64(1, 'ns')
         for ch in films.dataset.data_vars:
             eb = films.get_variable(ch)
             logger.debug("\neb=%s", eb)
             try:
                 hfc = HotfilmCalibration()
-                hfc.calibrate_winds(sonics, eb, begin, end_slice)
+                hfc.calibrate_winds(sonics, eb, begin, calperiod)
                 cals.append(hfc)
+                speeds.add_wind_speed(hfc, eb)
             except Exception as e:
                 logger.error(f"calibration failed for {eb.name} "
                              f"at {dt_string(begin)}: {e}")
-                continue
-            hfspd = hfc.convert_to_wind_speed(eb)
-            logger.debug("hfspd:\n%s", hfspd)
-            speeds.add_wind_speed(hfspd)
-            speeds.add_calibration(hfc.as_dataset())
-        begin = next_time
+                raise
+            if ncals and len(cals) >= ncals:
+                break
+        begin = begin + calperiod
 
-    logger.debug("%d calibrations done.", len(cals))
     if args.plot:
         plot_calibrations(2, 4, cals)
     else:

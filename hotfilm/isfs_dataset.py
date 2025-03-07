@@ -95,14 +95,16 @@ class IsfsDataset:
         dsv = self.reshape_variable(dsv)
         return dsv
 
-    def get_wind_variables(self, variable: xr.DataArray) -> tuple[xr.DataArray]:
+    def get_wind_variables(self, variable: xr.DataArray,
+                           components: list) -> tuple[xr.DataArray]:
         """
         Given a variable with a height and site attribute, return the sonic
-        wind component variables for that height.
+        wind component variables for that height and for the components
+        named in @p components: u, v, or w.
         """
         height = variable.attrs['height'].replace('.', '_')
         site = variable.attrs['site']
-        return [self.get_variable(f'{c}_{height}_{site}') for c in 'uvw']
+        return [self.get_variable(f'{c}_{height}_{site}') for c in components]
 
     def reshape_variable(self, dsv: xr.DataArray):
         """
@@ -128,7 +130,9 @@ class IsfsDataset:
         spd = np.sqrt(u**2 + w**2)
         uname = u.attrs['short_name']
         wname = w.attrs['short_name']
-        spd.attrs['long_name'] = f'|({uname},{wname})| (m/s)'
+        spd.attrs.update(u.attrs)
+        spd.attrs['long_name'] = f'|({uname},{wname})|'
+        spd.name = f'spd_{spd.attrs["height"]}_{spd.attrs["site"]}'
         return spd
 
     def close(self):

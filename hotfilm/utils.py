@@ -32,6 +32,7 @@ def convert_time_coordinate(ds: xr.Dataset, dt: xr.DataArray) -> xr.Dataset:
     vtime = np.array([td_to_microseconds(t) for t in (dt - base).data],
                      dtype='int64')
     ds = ds.assign_coords({dt.name: vtime})
+    ds[dt.name].attrs.update(dt.attrs)
     ds[dt.name].attrs['units'] = units
     ds[dt.name].encoding = {'dtype': 'int64'}
     logger.debug("converted time coordinate:\n%s\n -->to-->\n%s",
