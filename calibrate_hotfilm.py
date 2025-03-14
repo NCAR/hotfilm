@@ -11,6 +11,7 @@ import argparse
 import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
+import pandas as pd
 
 from hotfilm.isfs_dataset import IsfsDataset, rdatetime
 from hotfilm.hotfilm_dataset import HotfilmDataset
@@ -32,8 +33,9 @@ def plot_calibrations(nrows, ncols, cals: list[HotfilmCalibration]):
             return axs
         return axs[iplot // ncols, iplot % ncols]
 
-    begin = cals[0].eb.time.data[0]
-    end = cals[-1].eb.time.data[-1]
+    dname = cals[0].eb.dims[0]
+    begin = cals[0].eb[dname].data[0]
+    end = cals[-1].eb[dname].data[-1]
     title = f'Calibrations from {dt_string(begin)} to {dt_string(end)}'
     for iplot, hfc in enumerate(cals[:nplots]):
         hfc.plot(subplot(iplot))
@@ -41,18 +43,49 @@ def plot_calibrations(nrows, ncols, cals: list[HotfilmCalibration]):
     plt.show()
 
 
+def save_calibration_images(cals: list[HotfilmCalibration], filename: str):
+    """
+    Save calibration plots, one file for each calibration time.
+    """
+    ctime = None
+    icol = 0
+    fig = None
+    for hfc in cals + [None]:
+        # save previous figure if time has changed or end of list
+        if ctime and (not hfc or hfc.begin != ctime):
+            when = pd.to_datetime(ctime)
+            path = when.strftime(filename)
+            logger.info("saving %s", path)
+            fig.savefig(path)
+            ctime = None
+        if hfc and ctime is None:
+            # width:height ratio of 4:1 for square channel plots
+            fig = plt.figure(figsize=(20, 5))
+            axs = fig.subplots(1, 4, squeeze=False)
+            ctime = hfc.begin
+            icol = 0
+        if hfc:
+            hfc.plot(axs[0, icol])
+            icol += 1
+
+
 def main():
     xr.set_options(display_expand_attrs=True, display_expand_data=True)
+    ncpattern = 'hotfilm_wind_speed_%Y%m%d_%H%M%S.nc'
+    plotpattern = 'hotfilm_calibrations_%Y%m%d_%H%M%S.png'
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('hotfilms',
                         help='NetCDF file with hotfilm voltages')
     parser.add_argument('sonics',
                         help='ISFS NetCDF file with sonic wind components')
     parser.add_argument('--plot', action='store_true',
-                        help='Plot calibrations instead of writing to NetCDF')
-    parser.add_argument('--netcdf',
-                        help="Filename specifier for output NetCDF",
-                        default='hotfilm_wind_speed_%Y%m%d_%H%M%S.nc')
+                        help='Show calibration plots on screen')
+    parser.add_argument('--images', const=plotpattern, nargs='?',
+                        help='Write calibration plots to PNG files',
+                        default=None)
+    parser.add_argument('--netcdf', const=ncpattern, nargs='?',
+                        help="Write hot film wind speeds to NetCDF",
+                        default=None)
     parser.add_argument('--ncals', type=int,
                         help='Number of calibrations to compute, else 0',
                         default=0)
@@ -102,10 +135,14 @@ def main():
                 break
         begin = begin + calperiod
 
-    if args.plot:
+    if args.netcdf:
+        speeds.save(args.netcdf)
+    elif args.images:
+        save_calibration_images(cals, args.images)
+    elif args.plot:
         plot_calibrations(2, 4, cals)
     else:
-        speeds.save(args.netcdf)
+        logger.error("Select output with --plot, --images, or --netcdf.")
     films.close()
 
 

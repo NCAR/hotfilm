@@ -20,6 +20,8 @@ import matplotlib.axes
 from hotfilm.isfs_dataset import IsfsDataset
 from hotfilm.outout_path import OutputPath
 from .utils import convert_time_coordinate
+from .utils import set_time_coordinate_units
+
 
 logger = logging.getLogger(__name__)
 
@@ -45,15 +47,6 @@ def hotfilm_voltage_to_speed(eb, a, b):
     """
     spd = ((eb**2 - a)/b)**(1/0.45)
     return spd
-
-
-def resample_mean(da: xr.DataArray, period: str) -> xr.DataArray:
-    """
-    Resample the given DataArray to the mean over the given period, assuming
-    only that time is the first dimension but not necessarily named 'time'.
-    """
-    indexer = {da.dims[0]: period}
-    return da.resample(**indexer).mean(skipna=True, keep_attrs=True)
 
 
 class HotfilmCalibration:
@@ -107,6 +100,21 @@ class HotfilmCalibration:
         spd = sonics.get_speed(u, w)
         return self.calibrate(spd, eb, begin, end)
 
+    def resample_mean(self, da: xr.DataArray) -> xr.DataArray:
+        """
+        Resample the given DataArray to the mean over the given period,
+        assuming only that time is the first dimension but not necessarily
+        named 'time'.
+        """
+        period = f"{self.mean_interval_seconds}s"
+        indexer = {da.dims[0]: period}
+        means = da.resample(**indexer).mean(skipna=True, keep_attrs=True)
+        # the speed variable may have a time dimension with the frequency in
+        # the name, like time60, while the volts will not, so this gives both
+        # of them the same time coordinate name, based only on the averaging
+        # period.
+        return means.rename({f'{da.dims[0]}': f'time_mean_{period}'})
+
     def calibrate(self, spd: xr.DataArray, eb: xr.DataArray,
                   begin: np.datetime64, end: np.datetime64):
         """
@@ -117,11 +125,11 @@ class HotfilmCalibration:
         logger.debug("calibrating from %s to %s", begin, end)
         if len(spd) < 2:
             raise Exception(f"too few speed points: {len(spd)}")
-        spd = resample_mean(spd, f"{self.mean_interval_seconds}s")
+        spd = self.resample_mean(spd)
         if len(eb) < 2:
             raise Exception(f"too few voltage points: {len(eb)}")
         eb = eb.sel(**{eb.dims[0]: slice(begin, end)})
-        eb = resample_mean(eb, f"{self.mean_interval_seconds}s")
+        eb = self.resample_mean(eb)
         self.begin = begin
         return self.fit(spd, eb)
 
@@ -248,7 +256,7 @@ class HotfilmWindSpeedDataset:
     Wrapper for a xarray.Dataset which contains hotfilm wind speeds calibrated
     from hotfilm bridge voltages.
     """
-    CALIBRATION_TIME = 'calibration_time'
+    CALIBRATION_TIME = 'time_calibration'
 
     def __init__(self):
         """
@@ -283,7 +291,11 @@ class HotfilmWindSpeedDataset:
                          coords={timed.name: timed},
                          dims=[self.CALIBRATION_TIME],
                          attrs={'long_name': long_name, 'units': units})
-        ds = xr.Dataset({a.name: a, b.name: b})
+
+        # include the eb and spd mean data as variables, with yet another time
+        # dimension.
+        ds = xr.Dataset({a.name: a, b.name: b,
+                         hfc.eb.name: hfc.eb, hfc.spd.name: hfc.spd})
         self.dataset = self.dataset.merge(ds)
 
     def add_wind_speed(self, hfc: HotfilmCalibration, eb: xr.DataArray):
@@ -327,7 +339,14 @@ class HotfilmWindSpeedDataset:
             filename = outpath.start(fspec, self.dataset)
             ds = convert_time_coordinate(self.dataset, self.dataset.time)
             cdim = ds.coords[self.CALIBRATION_TIME]
-            ds = convert_time_coordinate(ds, cdim)
+            # microsecond resolution is not needed for calibration time
+            # coordinates, but if we don't set it explicitly then xarray will
+            # use minutes, and we'd like the units to be consistent regardless
+            # of the calibration period.
+            set_time_coordinate_units(cdim, 'seconds')
+            cdim = ds.coords[[dim for dim in ds.dims if 'mean' in dim][0]]
+            set_time_coordinate_units(cdim, 'seconds')
+
             logger.debug("calling to_netcdf() on dataset:\n%s", ds)
             ds.to_netcdf(filename)
             filename = outpath.finish()

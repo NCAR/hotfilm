@@ -26,15 +26,23 @@ def test_hotfilm_dataset():
     hfd.dataset.close()
 
 
-def get_hotfilm_data(nseconds: int, ntimes: int, a: float, b: float):
+def get_times(nseconds: int, ntimes: int) -> pd.DatetimeIndex:
     """
-    Create voltage and speed datasets over a nseconds time period with ntimes
-    points, using the given calibration coefficients a and b.
+    Create a time index over a nseconds time period with ntimes points.
     """
     origin = np.datetime64("2023-09-14T12:00:00", "ns")
     end = origin + np.timedelta64(nseconds, 's')
     # use ntimes+1 to get ntimes times, since the last point is omitted
     dtime = pd.date_range(origin, end, periods=ntimes+1, inclusive="left")
+    return dtime
+
+
+def get_hotfilm_data(nseconds: int, ntimes: int, a: float, b: float):
+    """
+    Create voltage and speed datasets over a nseconds time period with ntimes
+    points, using the given calibration coefficients a and b.
+    """
+    dtime = get_times(nseconds, ntimes)
     volts = xr.DataArray(np.linspace(2.0, 3.0, ntimes), name='ch0',
                          coords={'time': dtime},
                          attrs={'units': 'V', 'long_name': 'ch0 voltage'})
@@ -107,3 +115,20 @@ def test_calibration_means():
     # should end up with 300 means
     assert hfc.num_points() == 300
     assert hfc.a, hfc.b == pytest.approx((a, b))
+
+
+def test_resample():
+    "Test resample to a different time period."
+    ntimes = 10
+    dtime = get_times(5, ntimes)
+    volts = xr.DataArray(np.linspace(2.0, 3.0, ntimes, endpoint=False),
+                         name='ch0', coords={'time': dtime},
+                         attrs={'units': 'V', 'long_name': 'ch0 voltage'})
+    assert volts.data[0] == 2.0
+    assert volts.data[1] == 2.1
+    assert volts.data[-1] == 2.9
+    hfc = HotfilmCalibration()
+    volts = hfc.resample_mean(volts)
+    assert len(volts.data) == 5
+    assert volts.data == pytest.approx(np.linspace(2.05, 2.85, 5))
+    assert volts.dims[0] == "time_mean_1s"

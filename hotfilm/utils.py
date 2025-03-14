@@ -38,3 +38,13 @@ def convert_time_coordinate(ds: xr.Dataset, dt: xr.DataArray) -> xr.Dataset:
     logger.debug("converted time coordinate:\n%s\n -->to-->\n%s",
                  dt, ds[dt.name])
     return ds
+
+
+def set_time_coordinate_units(cdim: xr.DataArray, units: str) -> None:
+    """"
+    Set the encoding for this time coordinate relative to the first time
+    using @p units.
+    """
+    base = pd.to_datetime(cdim.data[0])
+    cdim.encoding = {'units': f'{units} since %s' %
+                              base.strftime("%Y-%m-%d %H:%M:%S+00:00")}
