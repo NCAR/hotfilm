@@ -80,7 +80,7 @@ def calibrate_hotfilm(args, sonics: IsfsDataset,
     last = films.timev.data[-1]
     logger.debug("first=%s, type=%s", first, type(first))
     begin = rdatetime(first, calperiod)
-    end = rdatetime(last, calperiod)
+    end = rdatetime(last, calperiod) + calperiod
 
     speeds = HotfilmWindSpeedDataset()
 
@@ -99,7 +99,6 @@ def calibrate_hotfilm(args, sonics: IsfsDataset,
             except Exception as e:
                 logger.error(f"calibration failed for {eb.name} "
                              f"at {dt_string(begin)}: {e}")
-                raise
             if ncals and len(cals) >= ncals:
                 break
         begin = begin + calperiod
@@ -140,6 +139,9 @@ def main():
         cals = []
         speeds = calibrate_hotfilm(args, sonics, filename, cals)
 
+        if not speeds.dataset.data_vars:
+            logger.error("no wind speeds for %s", filename)
+            continue
         if args.netcdf:
             speeds.save(args.netcdf)
         elif args.images:

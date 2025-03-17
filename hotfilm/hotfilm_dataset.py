@@ -123,10 +123,10 @@ class HotfilmCalibration:
         logger.debug("calibrating from %s to %s", begin, end)
         if len(spd) < 2:
             raise Exception(f"too few speed points: {len(spd)}")
-        spd = self.resample_mean(spd)
+        eb = eb.sel(**{eb.dims[0]: slice(begin, end)})
         if len(eb) < 2:
             raise Exception(f"too few voltage points: {len(eb)}")
-        eb = eb.sel(**{eb.dims[0]: slice(begin, end)})
+        spd = self.resample_mean(spd)
         eb = self.resample_mean(eb)
         self.begin = begin
         return self.fit(spd, eb)
@@ -335,7 +335,7 @@ class HotfilmWindSpeedDataset:
         outpath = OutputPath()
         logger.debug("saving dataset:\n%s", self.dataset)
         try:
-            filename = outpath.start(fspec, self.dataset)
+            tfile = outpath.start(fspec, self.dataset)
             ds = convert_time_coordinate(self.dataset, self.dataset.time)
             cdim = ds.coords[self.CALIBRATION_TIME]
             # microsecond resolution is not needed for calibration time
@@ -347,7 +347,11 @@ class HotfilmWindSpeedDataset:
             set_time_coordinate_units(cdim, 'seconds')
 
             logger.debug("calling to_netcdf() on dataset:\n%s", ds)
-            ds.to_netcdf(filename)
+            # filename must be passed as a string and not Path, despite the
+            # type hint for to_netcdf() that accepts PathLike, otherwise a
+            # test for a file path inside xarray.backends.api.to_netcdf()
+            # fails and forces the engine to be scipy.
+            ds.to_netcdf(tfile.name, engine="netcdf4", format='NETCDF4')
             filename = outpath.finish()
             logging.info(f"saved hotfilm wind speed dataset: {filename}")
         finally:
