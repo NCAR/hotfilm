@@ -13,8 +13,7 @@ authors = [
 dependencies = [
     "xarray",
     "numpy",
-    "scipy",
-    "netCDF4",
+    "netcdf4",
     "matplotlib",
     "pandas",
     "bokeh",
