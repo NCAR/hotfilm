@@ -57,6 +57,7 @@ def save_calibration_images(cals: list[HotfilmCalibration], filename: str):
             path = when.strftime(filename)
             logger.info("saving %s", path)
             fig.savefig(path)
+            plt.close(fig)
             ctime = None
         if hfc and ctime is None:
             # width:height ratio of 4:1 for square channel plots
@@ -69,15 +70,54 @@ def save_calibration_images(cals: list[HotfilmCalibration], filename: str):
             icol += 1
 
 
+def calibrate_hotfilm(args, sonics: IsfsDataset,
+                      filename, cals: list[HotfilmCalibration]) -> HotfilmWindSpeedDataset:
+    films = HotfilmDataset().open(filename)
+    logger.debug("\nhotfilm.timev=%s", films.timev)
+    calperiod = np.timedelta64(300, 's')
+    # start with first time in hotfilm dataset rounded to cal period.
+    first = films.timev.data[0]
+    last = films.timev.data[-1]
+    logger.debug("first=%s, type=%s", first, type(first))
+    begin = rdatetime(first, calperiod)
+    end = rdatetime(last, calperiod)
+
+    speeds = HotfilmWindSpeedDataset()
+
+    # Compute calibrations
+    ncals = args.ncals
+    logger.info("begin=%s, end=%s, ncals=%d", begin, end, ncals)
+    while begin < end and (not ncals or len(cals) < ncals):
+        for ch in films.dataset.data_vars:
+            eb = films.get_variable(ch)
+            logger.debug("\neb=%s", eb)
+            try:
+                hfc = HotfilmCalibration()
+                hfc.calibrate_winds(sonics, eb, begin, calperiod)
+                cals.append(hfc)
+                speeds.add_wind_speed(hfc, eb)
+            except Exception as e:
+                logger.error(f"calibration failed for {eb.name} "
+                             f"at {dt_string(begin)}: {e}")
+                raise
+            if ncals and len(cals) >= ncals:
+                break
+        begin = begin + calperiod
+    films.close()
+    return speeds
+
+
 def main():
     xr.set_options(display_expand_attrs=True, display_expand_data=True)
     ncpattern = 'hotfilm_wind_speed_%Y%m%d_%H%M%S.nc'
     plotpattern = 'hotfilm_calibrations_%Y%m%d_%H%M%S.png'
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('hotfilms',
-                        help='NetCDF file with hotfilm voltages')
+    parser.add_argument('hotfilms', nargs='+',
+                        help='One or more hotfilm voltage NetCDF files')
     parser.add_argument('sonics',
-                        help='ISFS NetCDF file with sonic wind components')
+                        help='Directory path to ISFS NetCDF files '
+                        'with sonic wind components, optionally including '
+                        'a filename pattern with time specifiers.')
     parser.add_argument('--plot', action='store_true',
                         help='Show calibration plots on screen')
     parser.add_argument('--images', const=plotpattern, nargs='?',
@@ -94,56 +134,21 @@ def main():
     args = parser.parse_args()
     level = logging.getLevelNamesMapping()[args.log.upper()]
     logging.basicConfig(level=level)
-    filename = args.hotfilms
-    films = HotfilmDataset().open(filename)
-    logger.debug("\nhotfilm.timev=%s", films.timev)
+    sonics = IsfsDataset(args.sonics)
 
-    calperiod = np.timedelta64(300, 's')
-    # start with first time in hotfilm dataset rounded to cal period.
-    first = films.timev.data[0]
-    last = films.timev.data[-1]
-    logger.debug("first=%s, type=%s", first, type(first))
-    begin = rdatetime(first, calperiod)
-    end = rdatetime(last, calperiod)
-    sonics = IsfsDataset().open(args.sonics)
-    cals = []
+    for filename in args.hotfilms:
+        cals = []
+        speeds = calibrate_hotfilm(args, sonics, filename, cals)
 
-    speeds = HotfilmWindSpeedDataset()
-
-    # Compute calibrations
-    end_sonics = sonics.timev.data[-1]
-    ncals = args.ncals
-    logger.info("begin=%s, end=%s, ncals=%d", begin, end, ncals)
-    while begin < end and (not ncals or len(cals) < ncals):
-        if begin > end_sonics:
-            logger.warning(f"No sonic wind speed data past "
-                           f"{dt_string(end_sonics)}.")
+        if args.netcdf:
+            speeds.save(args.netcdf)
+        elif args.images:
+            save_calibration_images(cals, args.images)
+        elif args.plot:
+            plot_calibrations(2, 4, cals)
+        else:
+            logger.error("Select output with --plot, --images, or --netcdf.")
             break
-        for ch in films.dataset.data_vars:
-            eb = films.get_variable(ch)
-            logger.debug("\neb=%s", eb)
-            try:
-                hfc = HotfilmCalibration()
-                hfc.calibrate_winds(sonics, eb, begin, calperiod)
-                cals.append(hfc)
-                speeds.add_wind_speed(hfc, eb)
-            except Exception as e:
-                logger.error(f"calibration failed for {eb.name} "
-                             f"at {dt_string(begin)}: {e}")
-                raise
-            if ncals and len(cals) >= ncals:
-                break
-        begin = begin + calperiod
-
-    if args.netcdf:
-        speeds.save(args.netcdf)
-    elif args.images:
-        save_calibration_images(cals, args.images)
-    elif args.plot:
-        plot_calibrations(2, 4, cals)
-    else:
-        logger.error("Select output with --plot, --images, or --netcdf.")
-    films.close()
 
 
 if __name__ == "__main__":

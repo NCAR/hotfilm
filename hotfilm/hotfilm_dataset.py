@@ -94,9 +94,7 @@ class HotfilmCalibration:
         """
         self.period_seconds = period.astype('timedelta64[s]').astype(int)
         end = self.get_end_time(begin)
-        u, w = sonics.get_wind_variables(eb, 'uw')
-        u = u.sel(**{u.dims[0]: slice(begin, end)})
-        w = w.sel(**{w.dims[0]: slice(begin, end)})
+        u, w = sonics.get_wind_data(eb, 'uw', begin, end)
         spd = sonics.get_speed(u, w)
         return self.calibrate(spd, eb, begin, end)
 
@@ -229,6 +227,7 @@ class HotfilmDataset:
         self.timed = None
 
     def open(self, filename):
+        logger.info(f"opening hotfilm dataset: {filename}")
         self.dataset = xr.open_dataset(filename)
         self.timev = self.dataset['time']
         self.timed = self.timev.dims[0]

@@ -2,10 +2,12 @@
 Read wind vectors from ISFS netcdf files.
 """
 
+from pathlib import Path
 import logging
 import numpy as np
 import xarray as xr
 import datetime as dt
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -25,12 +27,47 @@ def rdatetime(when: np.datetime64, period: np.timedelta64) -> np.datetime64:
 
 class IsfsDataset:
 
-    def __init__(self):
+    DEFAULT_PATH_SPEC = "isfs_m2hats_qc_hr_inst_%Y%m%d_%H0000.nc"
+
+    def __init__(self, pathspec: str = None):
         self.dataset = None
         self.timev = None
         self.timed = None
+        self.pathspec = pathspec
+        self.filename = None
+        # as a convenience, if pathspec is a directory, then automatically
+        # append the filename spec
+        if pathspec is None:
+            self.pathspec = self.DEFAULT_PATH_SPEC
+        elif Path(pathspec).is_dir():
+            self.pathspec = str(Path(pathspec) / self.DEFAULT_PATH_SPEC)
+
+    def lookup_filepath(self, when: np.datetime64) -> str:
+        """
+        Return the filename for the given time by formatting the pathspec with @p when.
+        """
+        dt = pd.to_datetime(when)
+        filepath = Path(dt.strftime(str(self.pathspec)))
+        if not filepath.exists():
+            logger.error("File for time %s does not exist: %s",
+                         dt, filepath)
+            return None
+        return filepath
+
+    def load_filepath(self, when: np.datetime64):
+        """
+        Make sure the dataset for the given time is loaded, either because
+        it's the current file or by closing the current file and opening the
+        new one.
+        """
+        filepath = self.lookup_filepath(when)
+        if filepath != self.filename:
+            self.close()
+            self.open(filepath)
 
     def open(self, filename):
+        self.filename = filename
+        logger.info(f"loading isfs dataset: {filename}")
         self.dataset = xr.open_dataset(filename)
         timev = self.dataset['time']
         # for some reason xarray only parses the date in the time units, so
@@ -106,6 +143,18 @@ class IsfsDataset:
         site = variable.attrs['site']
         return [self.get_variable(f'{c}_{height}_{site}') for c in components]
 
+    def get_wind_data(self, variable: xr.DataArray,
+                      components: list,
+                      begin: np.datetime64,
+                      end: np.datetime64) -> tuple[xr.DataArray]:
+        """
+        Find the requested wind variables for the specific time range,
+        closing the current file and opening a new one as needed.
+        """
+        self.load_filepath(begin)
+        vars = self.get_wind_variables(variable, components)
+        return [v.sel(**{v.dims[0]: slice(begin, end)}) for v in vars]
+
     def reshape_variable(self, dsv: xr.DataArray):
         """
         Given a time series with a sub-sample dimension, reshape it to a 1D
@@ -136,4 +185,11 @@ class IsfsDataset:
         return spd
 
     def close(self):
+        if self.dataset is None:
+            return
         self.dataset.close()
+        self.dataset = None
+        self.timev = None
+        self.timed = None
+        # consider if memory not released soon enough
+        # gc.collect()
