@@ -13,6 +13,7 @@ import xarray as xr
 from hotfilm.outout_path import OutputPath
 from hotfilm.utils import convert_time_coordinate
 from hotfilm.utils import td_to_microseconds
+from hotfilm.utils import add_history_to_dataset
 
 from typing import Generator, Union
 from typing import Optional, List
@@ -97,7 +98,6 @@ class time_formatter:
 
     def __call__(self, when):
         return self.formatter(when)
-
 
 
 def iso_to_datetime64(iso: str) -> np.datetime64:
@@ -546,8 +546,8 @@ adj scan strt: %s
             ds[c].attrs['short_name'] = f'Eb.{height}.{self.SITE}'
             ds[c].attrs['site'] = self.SITE
             ds[c].attrs['height'] = height
-        if self.command_line:
-            ds.attrs['history'] = self.command_line
+
+        add_history_to_dataset(ds, "dump_hotfilm", self.command_line)
         return ds
 
     def write_netcdf_file(self, filespec: str):

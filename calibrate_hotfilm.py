@@ -18,7 +18,7 @@ from hotfilm.hotfilm_dataset import HotfilmDataset
 from hotfilm.hotfilm_dataset import HotfilmWindSpeedDataset
 from hotfilm.hotfilm_dataset import HotfilmCalibration
 from hotfilm.hotfilm_dataset import dt_string
-
+from hotfilm.utils import add_history_to_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -70,8 +70,10 @@ def save_calibration_images(cals: list[HotfilmCalibration], filename: str):
             icol += 1
 
 
-def calibrate_hotfilm(args, sonics: IsfsDataset,
-                      filename, cals: list[HotfilmCalibration]) -> HotfilmWindSpeedDataset:
+def calibrate_hotfilm(
+        args, sonics: IsfsDataset,
+        filename,
+        cals: list[HotfilmCalibration]) -> HotfilmWindSpeedDataset:
     films = HotfilmDataset().open(filename)
     logger.debug("\nhotfilm.timev=%s", films.timev)
     calperiod = np.timedelta64(300, 's')
@@ -130,6 +132,8 @@ def main():
                         default=0)
     parser.add_argument('--log', help='Log level', default='info')
 
+    command_line = " ".join([f"'{arg}'" if ' ' in arg else arg
+                             for arg in sys.argv])
     args = parser.parse_args()
     level = logging.getLevelNamesMapping()[args.log.upper()]
     logging.basicConfig(level=level)
@@ -138,6 +142,8 @@ def main():
     for filename in args.hotfilms:
         cals = []
         speeds = calibrate_hotfilm(args, sonics, filename, cals)
+        ds = speeds.dataset
+        add_history_to_dataset(ds, "calibrate_hotfilm", command_line)
 
         if not speeds.dataset.data_vars:
             logger.error("no wind speeds for %s", filename)

@@ -111,7 +111,11 @@ class HotfilmCalibration:
         # the name, like time60, while the volts will not, so this gives both
         # of them the same time coordinate name, based only on the averaging
         # period.
-        return means.rename({f'{da.dims[0]}': f'time_mean_{period}'})
+        means = means.rename({f'{da.dims[0]}': f'time_mean_{period}'})
+        # This is also a good time to ensure the encoding type is float32, in
+        # case the source dataset has the older double type.
+        means.encoding['dtype'] = 'float32'
+        return means
 
     def calibrate(self, spd: xr.DataArray, eb: xr.DataArray,
                   begin: np.datetime64, end: np.datetime64):
@@ -284,12 +288,14 @@ class HotfilmWindSpeedDataset:
                          dims=[self.CALIBRATION_TIME],
                          coords={timed.name: timed},
                          attrs={'long_name': long_name, 'units': units})
+        a.encoding['dtype'] = 'float32'
         long_name = "zero-degree coefficient a: eb^2=a+b*spd^0.45"
         units = "(V^2)(m/s)^-0.45"
         b = xr.DataArray(name=f'b_{name}', data=[hfc.b],
                          coords={timed.name: timed},
                          dims=[self.CALIBRATION_TIME],
                          attrs={'long_name': long_name, 'units': units})
+        b.encoding['dtype'] = 'float32'
 
         # include the eb and spd mean data as variables, with yet another time
         # dimension.
@@ -313,6 +319,8 @@ class HotfilmWindSpeedDataset:
         spd.attrs['site'] = eb.attrs['site']
         spd.attrs['height'] = eb.attrs['height']
         spd.attrs['hotfilm_channel'] = eb.name
+        # in case source dataset has older double type
+        spd.encoding['dtype'] = 'float32'
         self.add_calibration(hfc)
         self.dataset = self.dataset.merge(spd)
         logger.debug("merged wind speed variable:\n%sresult:\n%s",

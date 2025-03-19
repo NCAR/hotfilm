@@ -280,6 +280,16 @@ def test_td_to_microseconds():
         assert isinstance(td_to_microseconds(td), int)
 
 
+def remove_attributes(ds: xr.Dataset, attrs: list[str]) -> None:
+    """
+    Remove attributes from the dataset which contain any of the names in @p
+    attrs.
+    """
+    for att in list(ds.attrs.keys()):
+        if [a for a in attrs if a in att]:
+            del ds.attrs[att]
+
+
 _this_dir = Path(__file__).parent
 _test_data_dir = Path("test_data")
 _test_out_dir = Path("test_out")
@@ -307,6 +317,9 @@ def test_netcdf_output():
     xbase = _this_dir / "baseline" / "channel2_20230804_180000_005.nc"
     tds = xr.open_dataset(xout)
     xds = xr.open_dataset(xbase)
+    ignores = ["history", "command_line", "version"]
+    remove_attributes(tds, ignores)
+    remove_attributes(xds, ignores)
     xout = xout.relative_to(Path.cwd())
     xbase = xbase.relative_to(Path.cwd())
     if tds.identical(xds):
@@ -322,6 +335,9 @@ def test_netcdf_output():
         pytest.fail(f"netcdf datasets {xbase} and {xout} differ, "
                     f"but {nc_compare} not found to show differences.")
     args = [nc_compare, xbase, xout,
+            "--ignore", "*version",
+            "--ignore", "history",
+            "--ignore", "*command_line",
             "--showindex", "--showtimes", "--nans-equal", "--showequal"]
     args = [str(arg) for arg in args]
     logger.debug("comparing: %s", " ".join(args))
