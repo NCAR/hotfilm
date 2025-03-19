@@ -468,6 +468,7 @@ adj scan strt: %s
         channel = int(match.group('spsid')) - 520
         name = f"ch{channel}"
         data = xr.DataArray(y, name=name, coords={'time': x})
+        data.encoding['dtype'] = 'float32'
         return data
 
     def write_text(self, out):
