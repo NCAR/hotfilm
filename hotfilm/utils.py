@@ -1,9 +1,10 @@
 
+import subprocess as sp
+from pathlib import Path
 import logging
 import numpy as np
 import xarray as xr
 import pandas as pd
-import subprocess as sp
 from . import VERSION
 
 logger = logging.getLogger(__name__)
@@ -68,9 +69,14 @@ def get_git_describe() -> str:
     """
     Get the git describe string for the current commit to provide extra
     context for the explicit version string, especially during development.
+    If no .git directory is found, return None.
     """
-    gd = sp.check_output(['git', 'describe', '--always'],
-                         universal_newlines=True).strip()
+    gd = None
+    source = Path(__file__).absolute().resolve().parent.parent
+    if (source / '.git').exists():
+        gd = sp.check_output(['git', 'describe', '--always'],
+                             universal_newlines=True,
+                             cwd=str(source)).strip()
     return gd
 
 
@@ -84,4 +90,5 @@ def add_history_to_dataset(ds: xr.Dataset, script: str,
     if command_line:
         ds.attrs[f'{script}_command_line'] = command_line
     gd = get_git_describe()
-    ds.attrs[f'{script}_version'] = f'{VERSION} ({gd})'
+    gd = f' ({gd})' if gd else ''
+    ds.attrs[f'{script}_version'] = f'{VERSION}{gd}'
