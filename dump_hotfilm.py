@@ -573,7 +573,13 @@ adj scan strt: %s
                 minutes = self.get_period(ds)
                 minutes = pd.to_timedelta(minutes).total_seconds() // 60
                 ds = self._add_netcdf_attrs(ds)
-                ds.to_netcdf(tfile.name, engine='netcdf4', format='NETCDF4')
+                # make sure data variables have type float32
+                encodings = {
+                    var.name: {'dtype': 'float32'}
+                    for var in ds.data_vars.values()
+                }
+                ds.to_netcdf(tfile.name, engine='netcdf4', format='NETCDF4',
+                             encoding=encodings)
                 outpath.finish(minutes)
 
             if tfile is None:

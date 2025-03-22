@@ -44,7 +44,8 @@ class IsfsDataset:
 
     def lookup_filepath(self, when: np.datetime64) -> str:
         """
-        Return the filename for the given time by formatting the pathspec with @p when.
+        Return the filename for the given time by formatting the pathspec with
+        @p when.
         """
         dt = pd.to_datetime(when)
         filepath = Path(dt.strftime(str(self.pathspec)))
@@ -181,7 +182,9 @@ class IsfsDataset:
         wname = w.attrs['short_name']
         spd.attrs.update(u.attrs)
         spd.attrs['long_name'] = f'|({uname},{wname})|'
-        spd.name = f'spd_{spd.attrs["height"]}_{spd.attrs["site"]}'
+        name = f'spd_{spd.attrs["height"]}_{spd.attrs["site"]}'
+        name = name.replace('.', '_')
+        spd.name = name
         return spd
 
     def close(self):

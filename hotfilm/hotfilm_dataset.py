@@ -301,7 +301,7 @@ class HotfilmWindSpeedDataset:
         # dimension.
         ds = xr.Dataset({a.name: a, b.name: b,
                          hfc.eb.name: hfc.eb, hfc.spd.name: hfc.spd})
-        self.dataset = self.dataset.merge(ds)
+        self.dataset = self.dataset.merge(ds, combine_attrs='identical')
 
     def add_wind_speed(self, hfc: HotfilmCalibration, eb: xr.DataArray):
         """
@@ -312,7 +312,10 @@ class HotfilmWindSpeedDataset:
         end = hfc.get_end_time(begin)
         eb = eb.sel(**{eb.dims[0]: slice(begin, end)})
         spd = hfc.speed(eb)
-        spd.name = 'spdhf_%(height)s_%(site)s' % eb.attrs
+        # follow isfs naming convention which replaces . with underscore,
+        # so 0.5m height is inserted into name as 0_5m
+        name = ('spdhf_%(height)s_%(site)s' % eb.attrs).replace('.', '_')
+        spd.name = name
         long_name = "wind speed orthogonal to hotfilm"
         spd.attrs['long_name'] = long_name
         spd.attrs['units'] = "m/s"
@@ -322,16 +325,21 @@ class HotfilmWindSpeedDataset:
         # in case source dataset has older double type
         spd.encoding['dtype'] = 'float32'
         self.add_calibration(hfc)
-        self.dataset = self.dataset.merge(spd)
+        self.dataset = self.dataset.merge(spd, combine_attrs='identical')
         logger.debug("merged wind speed variable:\n%sresult:\n%s",
                      spd, self.dataset)
 
     def open(self, filename):
         self.dataset = xr.open_dataset(filename)
-        self.timev = self.dataset['time']
-        self.timed = self.timev.dims[0]
-        logging.debug(f"Opened hotfilm speed dataset: {filename}, %s...%s",
-                      self.timev[0], self.timev[-1])
+        timev = self.dataset['time']
+        ctime = self.dataset[self.CALIBRATION_TIME]
+        mtime = next(v for v in self.dataset.coords.values()
+                     if 'mean' in v.name)
+        logging.info(f"opened hotfilm speed dataset: {filename}, "
+                     "speeds=>%s...%s, cals=>%s...%s, means=>%s...%s",
+                     dt_string(timev[0]), dt_string(timev[-1]),
+                     dt_string(ctime[0]), dt_string(ctime[-1]),
+                     dt_string(mtime[0]), dt_string(mtime[-1]))
         return self
 
     def save(self, fspec: str):
@@ -355,11 +363,19 @@ class HotfilmWindSpeedDataset:
             set_time_coordinate_units(cdim, 'seconds')
 
             logger.debug("calling to_netcdf() on dataset:\n%s", ds)
+            # despite adding encoding attributes to all the variables in the
+            # Dataset, apparently that gets dropped by a merge, so this just
+            # enforces the desired encoding when saving to netcdf.
+            encodings = {
+                var.name: {'dtype': 'float32'}
+                for var in ds.data_vars.values()
+            }
             # filename must be passed as a string and not Path, despite the
             # type hint for to_netcdf() that accepts PathLike, otherwise a
             # test for a file path inside xarray.backends.api.to_netcdf()
             # fails and forces the engine to be scipy.
-            ds.to_netcdf(tfile.name, engine="netcdf4", format='NETCDF4')
+            ds.to_netcdf(tfile.name, engine="netcdf4", format='NETCDF4',
+                         encoding=encodings)
             filename = outpath.finish()
             logging.info(f"saved hotfilm wind speed dataset: {filename}")
         finally:
@@ -379,16 +395,21 @@ class HotfilmWindSpeedDataset:
         Return the wind speed variables in this dataset.
         """
         # the wind speeds are all the variables which start spdhf
-        return [self.dataset[name] for name in self.dataset.data_vars
-                if name.startswith('spdhf')]
+        return [v for v in self.dataset.data_vars.values()
+                if v.name.startswith('spdhf')]
 
     def get_calibration(self, begin: np.datetime64,
                         spd: xr.DataArray) -> HotfilmCalibration:
         """
-        Given a wind speed variable, return the calibration for it.
+        Given a wind speed variable, return the calibration for it.  The
+        calibration variables are found by matching the height and site of the
+        given speed variable.
         """
         name = spd.attrs['hotfilm_channel']
-        logger.debug("getting calibration for %s", name)
+        site = spd.attrs['site']
+        height = spd.attrs['height']
+        logger.debug("getting calibration for %s, channel %s, at %s",
+                     spd.name, name, dt_string(begin))
         hfc = HotfilmCalibration()
         hfc.name = name
         loc = {self.CALIBRATION_TIME: begin}
@@ -400,4 +421,23 @@ class HotfilmWindSpeedDataset:
         hfc.period_seconds = ctime.attrs['period_seconds']
         hfc.mean_interval_seconds = ctime.attrs['mean_interval_seconds']
         hfc.begin = begin
+
+        # get slices for the mean voltages and speeds
+        height_ = height.replace('.', '_')
+        vars = [v for v in self.dataset.data_vars.values() if
+                v.attrs.get('site') == site and
+                v.attrs.get('height') in [height, height_]]
+        eb = next(v for v in vars if v.name.startswith('ch'))
+        spd = next(v for v in vars if v.name.startswith('spd_'))
+        end = hfc.get_end_time(begin)
+        calslice = {eb.dims[0]: slice(begin, end)}
+        eb = eb.sel(**calslice)
+        spd = spd.sel(**calslice)
+        hfc.eb = eb
+        hfc.spd = spd
+        hfc._num_points = len(eb)
+        logger.debug("%d calibration points: eb=%s, spd=%s, "
+                     "period_seconds=%s, mean_interval_seconds=%s",
+                     hfc.num_points(), eb.name, spd.name,
+                     hfc.period_seconds, hfc.mean_interval_seconds)
         return hfc
