@@ -3,7 +3,8 @@ from pytest import approx
 import logging
 from pathlib import Path
 import numpy as np
-from hotfilm.isfs_dataset import IsfsDataset, rdatetime
+from hotfilm.isfs_dataset import IsfsDataset
+from hotfilm.utils import rdatetime
 
 
 logger = logging.getLogger(__name__)

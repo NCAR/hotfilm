@@ -6,8 +6,8 @@ import pandas as pd
 import pytest
 
 from hotfilm.hotfilm_dataset import HotfilmDataset
-from hotfilm.hotfilm_dataset import HotfilmCalibration
-from hotfilm.hotfilm_dataset import hotfilm_voltage_to_speed
+from hotfilm.hotfilm_calibration import HotfilmCalibration
+from hotfilm.hotfilm_calibration import hotfilm_voltage_to_speed
 
 _this_dir = Path(__file__).parent
 _baseline_dir = _this_dir / "baseline"

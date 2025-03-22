@@ -13,6 +13,23 @@ _seconds_per_day = 24*60*60
 _microseconds_per_second = 1000000
 
 
+def rdatetime(when: np.datetime64, period: np.timedelta64) -> np.datetime64:
+    "Round when to the nearest multiple of period."
+    when_ns = when.astype('datetime64[ns]')
+    period_ns = period.astype('timedelta64[ns]').astype(int)
+    mod = when_ns.astype(int) % period_ns
+    # compare with zero since period_ns // 2 is zero when period_ns is 1
+    if mod < period_ns // 2 or mod == 0:
+        when_ns -= mod
+    else:
+        when_ns += period_ns - mod
+    return np.datetime64(when_ns, 'ns').astype(when.dtype)
+
+
+def dt_string(dt: np.datetime64) -> str:
+    return np.datetime_as_string(dt, unit='s')
+
+
 def td_to_microseconds(td64: np.timedelta64) -> int:
     td = pd.to_timedelta(td64)
     return ((td.days * _seconds_per_day +
