@@ -24,13 +24,10 @@ class HotfilmWindSpeedDataset:
         """
         self.dataset = xr.Dataset()
 
-    def add_calibration(self, hfc: HotfilmCalibration):
+    def create_calibration_coordinate(self, hfc: HotfilmCalibration):
         """
-        Create a Dataset with variables for the coefficients and a time
-        coordinate, and add it to this Dataset.
+        Return a time coordinate for the calibration period.
         """
-        ds = xr.Dataset()
-        name = hfc.get_name()
         attrs = {'long_name': 'Calibration period begin time',
                  'period_seconds': hfc.period_seconds,
                  'mean_interval_seconds': hfc.mean_interval_seconds}
@@ -38,11 +35,20 @@ class HotfilmWindSpeedDataset:
                              data=[hfc.begin],
                              dims=[self.CALIBRATION_TIME],
                              attrs=attrs)
+        return timed
+
+    def add_calibration(self, hfc: HotfilmCalibration):
+        """
+        Create a Dataset with variables for the coefficients and a time
+        coordinate, and add it to this Dataset.
+        """
+        ds = xr.Dataset()
+        name = hfc.get_name()
+        timed = self.create_calibration_coordinate(hfc)
 
         long_name = "first-degree coefficient b: eb^2=a+b*spd^0.45"
         units = "V^2"
         a = xr.DataArray(name=f'a_{name}', data=[hfc.a],
-                         dims=[self.CALIBRATION_TIME],
                          coords={timed.name: timed},
                          attrs={'long_name': long_name, 'units': units})
         a.encoding['dtype'] = 'float32'
@@ -50,9 +56,24 @@ class HotfilmWindSpeedDataset:
         units = "(V^2)(m/s)^-0.45"
         b = xr.DataArray(name=f'b_{name}', data=[hfc.b],
                          coords={timed.name: timed},
-                         dims=[self.CALIBRATION_TIME],
                          attrs={'long_name': long_name, 'units': units})
         b.encoding['dtype'] = 'float32'
+
+        long_name = "number of points in calibration"
+        units = "1"
+        npoints = xr.DataArray(name=f'npoints_{name}',
+                               data=[hfc.num_points()],
+                               coords={timed.name: timed},
+                               attrs={'long_name': long_name, 'units': units})
+        npoints.encoding['dtype'] = 'float32'
+
+        long_name = "RMS difference between calibration and sonic wind speed"
+        units = "m/s"
+        rms = xr.DataArray(name=f'rms_{name}',
+                           data=[hfc.rms],
+                           coords={timed.name: timed},
+                           attrs={'long_name': long_name, 'units': units})
+        rms.encoding['dtype'] = 'float32'
 
         # include the eb and spd mean data as variables, with yet another time
         # dimension.
@@ -60,6 +81,8 @@ class HotfilmWindSpeedDataset:
                          hfc.u.name: hfc.u,
                          hfc.v.name: hfc.v,
                          hfc.w.name: hfc.w,
+                         npoints.name: npoints,
+                         rms.name: rms,
                          hfc.eb.name: hfc.eb, hfc.spd.name: hfc.spd})
         self.dataset = self.dataset.merge(ds, combine_attrs='identical')
 
@@ -195,9 +218,18 @@ class HotfilmWindSpeedDataset:
         spd = spd.sel(**calslice)
         hfc.eb = eb
         hfc.spd = spd
-        hfc._num_points = len(eb)
+        if f'npoints_{name}' not in self.dataset.data_vars:
+            hfc._num_points = len(eb)
+        else:
+            hfc._num_points = self.dataset[f'npoints_{name}'].sel(**loc).data
+        if f'rms_{name}' not in self.dataset.data_vars:
+            hfc.calculate_rms()
+        else:
+            hfc.rms = self.dataset[f'rms_{name}'].sel(**loc).data
         logger.debug("%d calibration points: eb=%s, spd=%s, "
-                     "period_seconds=%s, mean_interval_seconds=%s",
+                     "period_seconds=%s, mean_interval_seconds=%s, "
+                     "npoints=%s, rms=%s",
                      hfc.num_points(), eb.name, spd.name,
-                     hfc.period_seconds, hfc.mean_interval_seconds)
+                     hfc.period_seconds, hfc.mean_interval_seconds,
+                     hfc._num_points, hfc.rms)
         return hfc

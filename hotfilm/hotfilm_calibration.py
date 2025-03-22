@@ -47,6 +47,7 @@ class HotfilmCalibration:
     spd: xr.DataArray
     u: xr.DataArray
     v: xr.DataArray
+    rms: float
 
     def __init__(self):
         self.name = None
@@ -60,6 +61,7 @@ class HotfilmCalibration:
         self.mean_interval_seconds = 1
         self.period_seconds = 300
         self.begin = None
+        self.rms = None
 
     def get_name(self):
         return self.name
@@ -172,7 +174,22 @@ class HotfilmCalibration:
         logger.debug("polynomial converted: a=%.2f, b=%.2f, %s, "
                      "window=%s, domain=%s",
                      self.a, self.b, pfit, pfit.window, pfit.domain)
+        self.calculate_rms()
         return self
+
+    def calculate_rms(self):
+        """
+        Calculate the root mean square of the difference between the sonic
+        wind speeds and the calibration curve.
+        """
+        if self.spd is None or self.eb is None:
+            raise Exception("no data to calculate RMS")
+        eb = self.eb
+        spd = self.speed(eb)
+        spd_sonic = self.spd
+        rms = np.sqrt(np.mean((spd_sonic - spd)**2))
+        self.rms = rms
+        return rms
 
     def num_points(self):
         "Return the number of points used in this calibration."
@@ -189,7 +206,6 @@ class HotfilmCalibration:
         """
         Plot the calibration curve on the given axes.
         """
-        # get the speed variable and convert it back to voltages
         spd = self.spd
         eb = self.eb
         logger.debug("plotting calibration curve:\n-->eb=%s\n-->spd=%s",
@@ -200,11 +216,14 @@ class HotfilmCalibration:
         logger.debug("min eb=%s, max eb=%s", ebmin, ebmax)
         ebline = np.linspace(ebmin, ebmax, 100)
         spdline = self.speed(ebline)
-        label = f'Fit: Spd^0.45 = (eb^2 - {self.a:.2f})/{self.b:.2f})'
+        label = f'$spd^{{0.45}} = (eb^2 - {self.a:.2f}_a)/{self.b:.2f}_b$'
         # plot the calibration curve
         ax.plot(spdline, ebline, color='red', label=label)
         # plot the data
-        ax.scatter(spd, eb)
+        if self.rms is None:
+            self.calculate_rms()
+        label = 'mean eb vs $|(u,w)|$, rms=%.2f m/s' % self.rms
+        ax.scatter(spd, eb, label=label)
         ax.set_xlabel(f"{spd.name} ({spd.attrs['units']})")
         ax.set_ylabel(f"{eb.name} ({eb.attrs['units']})")
         dtime = eb.coords[eb.dims[0]]
