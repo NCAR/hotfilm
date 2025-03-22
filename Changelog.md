@@ -2,6 +2,17 @@
 
 ## [unreleased] - Pending changes
 
+## [1.3] - 2025-03-22
+
+The `calibrate_hotfilm.py` script has been created.  It reads hotfilm voltage
+netcdf files and ISFS sonic netcdf files to calculate calibration fits, then
+uses those calibrations to calculate wind speed from the hotfilm voltages and
+write the results to netcdf.  The netcdf files contain each calibration,
+including the coefficients, RMS, the mean u, v, and w from the sonics, and the
+mean voltage and wind speed used to compute the least squares fit to the
+calibration equation.  Calibration plots can be saved either while generating
+the calibrations or afterwards directly from the netcdf files.
+
 Raw data dumps can now write text csv or netcdf, for either 2K or 4K data.
 There is an algorithm which tries to detect contiguous blocks of data, then
 adjusts the timestamps of subsequent blocks to match the sampling rate, to
@@ -9,10 +20,8 @@ account for clock drift between the ADC clock and GPS.  New output files are
 started when there is missing data (meaning GPS sync was lost or a buffer
 overrun occurred) or clock drift gets too large.
 
-Use the new `--precision` flag to `data_dump` to print data values with full
-precision.  `dump_hotfilm.py` must be run with the nidas
-[buster](https://github.com/NCAR/nidas/tree/buster) branch, since
-`--precision` only exists on that branch.
+Use the `--precision` flag to `data_dump` to print data values with full
+precision.
 
 ## [1.2] - 2023-09-07
 
@@ -60,7 +69,8 @@ latency.  Timestamp synchronization seems to work reliably, but might need
 improvement.
 
 <!-- Versions -->
-[unreleased]: https://github.com/NCAR/hotfilm/compare/v1.2...HEAD
+[unreleased]: https://github.com/NCAR/hotfilm/compare/v1.3...HEAD
+[1.3]: https://github.com/NCAR/hotfilm/releases/tag/v1.3
 [1.2]: https://github.com/NCAR/hotfilm/releases/tag/v1.2
 [1.1]: https://github.com/NCAR/hotfilm/releases/tag/v1.1
 [1.0]: https://github.com/NCAR/hotfilm/releases/tag/v1.0
