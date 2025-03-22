@@ -61,11 +61,17 @@ class HotfilmCalibration:
     period_seconds: int
     begin: np.datetime64
     end: np.datetime64
+    eb: xr.DataArray
+    spd: xr.DataArray
+    u: xr.DataArray
+    v: xr.DataArray
 
     def __init__(self):
         self.name = None
         self.eb = None
         self.spd = None
+        self.u = None
+        self.v = None
         self._num_points = None
         self.a = None
         self.b = None
@@ -94,7 +100,11 @@ class HotfilmCalibration:
         """
         self.period_seconds = period.astype('timedelta64[s]').astype(int)
         end = self.get_end_time(begin)
-        u, w = sonics.get_wind_data(eb, 'uw', begin, end)
+        # get the wind component variables sliced to the current time period
+        u, v, w = sonics.get_wind_data(eb, 'uvw', begin, end)
+        self.u = self.resample_mean(u)
+        self.v = self.resample_mean(v)
+        self.w = self.resample_mean(w)
         spd = sonics.get_speed(u, w)
         return self.calibrate(spd, eb, begin, end)
 
@@ -300,6 +310,9 @@ class HotfilmWindSpeedDataset:
         # include the eb and spd mean data as variables, with yet another time
         # dimension.
         ds = xr.Dataset({a.name: a, b.name: b,
+                         hfc.u.name: hfc.u,
+                         hfc.v.name: hfc.v,
+                         hfc.w.name: hfc.w,
                          hfc.eb.name: hfc.eb, hfc.spd.name: hfc.spd})
         self.dataset = self.dataset.merge(ds, combine_attrs='identical')
 
