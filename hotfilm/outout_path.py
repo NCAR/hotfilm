@@ -38,13 +38,13 @@ class OutputPath:
     def finish(self, minutes: int = None) -> Path:
         path = self.path
         if minutes is None:
-            fpath = path
+            fpath = path.name
         else:
             fpath = path.stem + ("_%03d" % (minutes)) + path.suffix
         fpath = Path(self.tfile.name).parent / fpath
         logger.debug("file finished with mins=%s, renaming: %s",
                      minutes, fpath)
-        fpath = Path(self.tfile.name).rename(fpath)
+        fpath = Path(self.tfile.name).replace(fpath)
         # the files should not need to be writable
         fpath.chmod(0o444)
         self.tfile = None
