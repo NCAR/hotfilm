@@ -5,7 +5,7 @@
 # source /opt/nidas/bin/setup_nidas.sh
 
 # Dates of interest
-dates=read <<EOF
+dates=`cat <<EOF
 20230804
 20230827
 20230905
@@ -13,9 +13,7 @@ dates=read <<EOF
 20230919
 20230920
 20230922
-EOF
-
-date=20230804
+EOF`
 
 # Output will go into subdirectories of the current directory by default.
 
