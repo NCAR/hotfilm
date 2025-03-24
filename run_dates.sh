@@ -75,8 +75,8 @@ run_date() # date
     run_calibrate $date
 }
 
-for dt in $dates ; do
-    run_date $dt >& run_dates.${date}.log &
+for day in $dates ; do
+    run_date $day >& run_dates.${day}.log &
 done
 
 wait
