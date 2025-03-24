@@ -343,3 +343,54 @@ def test_netcdf_output():
     logger.debug("comparing: %s", " ".join(args))
     assert sp.check_call(args) == 0
     pytest.fail("datasets not identical, but nc_compare returned 0!")
+
+
+def create_lines(when: dt.datetime, nchannels: int, nscans: int,
+                 sample_rate: int) -> list[str]:
+    """
+    Given the number of channels in each scan, and a number of scans, and the
+    given sample rate, create a list of lines with sample data.
+    """
+    lines = []
+    fmt = "%Y %m %d %H:%M:%S.0"
+    for iscan in range(nscans):
+        for ch in range(nchannels):
+            line = f"{when.strftime(fmt)} 200, {521+ch}   8000"
+            line += " 2.4" * sample_rate
+            line += "\n"
+            lines.append(line)
+        when += dt.timedelta(seconds=1)
+    return lines
+
+
+def test_sample_rate():
+    hf = ReadHotfilm()
+    hf.minblock = 0
+    # create test data with 2 full scans of 4 channels, first at 10 hz and
+    # then at 20 hz, and make sure read_scans() breaks between them and sets
+    # sample_rate correctly.
+    nchannels = 4
+    nscans = 2
+    when = dt.datetime(2023, 7, 20, 1, 2, 3)
+    datalines = create_lines(when, nchannels, nscans, 10)
+    when += dt.timedelta(seconds=nscans)
+    datalines.extend(create_lines(when, 4, 2, 20))
+    logger.debug("test data lines:\n%s", "".join(datalines))
+    hf.line_iterator = iter(datalines)
+    ds = list(hf.read_scans())
+    assert len(ds) == 2
+    assert ds[0]
+    assert ds[1]
+    assert hf.sample_rate == 10
+    assert len(ds[0].time) == 10
+    assert len(ds[1].time) == 10
+
+    ds = list(hf.read_scans())
+    assert len(ds) == 2
+    assert ds[0]
+    assert ds[1]
+    assert hf.sample_rate == 20
+    assert len(ds[0].time) == 20
+    assert len(ds[1].time) == 20
+
+    assert not list(hf.read_scans())

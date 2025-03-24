@@ -29,8 +29,8 @@ class HotfilmWindSpeedDataset:
         Return a time coordinate for the calibration period.
         """
         attrs = {'long_name': 'Calibration period begin time',
-                 'period_seconds': hfc.period_seconds,
-                 'mean_interval_seconds': hfc.mean_interval_seconds}
+                 'period_seconds': np.int32(hfc.period_seconds),
+                 'mean_interval_seconds': np.int32(hfc.mean_interval_seconds)}
         timed = xr.DataArray(name=self.CALIBRATION_TIME,
                              data=[hfc.begin],
                              dims=[self.CALIBRATION_TIME],

@@ -154,6 +154,8 @@ class ReadHotfilm:
         self.line_iterator = None
         self.precision = 8
         self.command_line = None
+        # keep track of the sample rate in case it changes
+        self.sample_rate = None
 
     def set_command_line(self, argv):
         self.command_line = " ".join([f"'{arg}'" if ' ' in arg else arg
@@ -236,7 +238,8 @@ class ReadHotfilm:
 
     def get_scan(self) -> xr.Dataset:
         """
-        Return a Dataset with all the channels in a single scan.
+        Return a Dataset with all the channels in a single scan.  A scan is
+        all channels with the same timestamp and the same sample rate.
         """
         # The full scan to be returned.
         scan = None
@@ -249,8 +252,17 @@ class ReadHotfilm:
                 break
             when = data.time[0]
             if self.scan is None or self.scan.time[0] != when:
-                logger.debug("starting new scan at %s", ft(when))
+                logger.debug("starting scan with %s at %s",
+                             data.name, ft(when))
                 # the current scan, if any, is what will be returned
+                scan = self.scan
+                self.scan = xr.Dataset({data.name: data})
+            elif len(self.scan.time) != len(data.time):
+                # sample rate changed, so return the current scan
+                logger.debug("starting scan with %s at %s: "
+                             "sample rate changed from %d to %d Hz",
+                             data.name, ft(when),
+                             len(self.scan.time), len(data.time))
                 scan = self.scan
                 self.scan = xr.Dataset({data.name: data})
             else:
@@ -263,8 +275,8 @@ class ReadHotfilm:
 
     def is_contiguous(self, ds: xr.Dataset, scan: xr.Dataset) -> bool:
         """
-        Return true if @p scan looks contiguous with @p frame, and if so,
-        adjust the timestamps in @p scan accordingly.
+        Return true if @p scan looks contiguous with @p ds, and if so, adjust
+        the timestamps in @p scan accordingly.
 
         The next 1-second scan is contiguous if it starts within 1 second and
         two sample periods relative to the expected start.  This allows shifts
@@ -366,6 +378,7 @@ adj scan strt: %s
         Yield the minimum time period of scans and the following scans until
         there is a break.
         """
+        logger.debug("starting read_scans()...")
         self.adjust_time = 0
         # accumulate scans in a list until the minimum period is reached.
         minreached = False
@@ -373,13 +386,24 @@ adj scan strt: %s
         last_scan = None
         # period tracks the length of the current block so far
         period = np.timedelta64(0, 's')
+        # reset sample rate so it will be set by next scan.
+        self.sample_rate = None
         while True:
             scan = self.next_scan
             skipped = False
             if scan is None:
                 scan = self.get_scan()
             self.next_scan = None
+            if scan:
+                logger.debug("handling next scan: %d channels of "
+                             "%d samples at %s",
+                             len(scan.data_vars), len(scan.time),
+                             ft(scan.time[0]))
+            if scan and not self.sample_rate:
+                self.sample_rate = len(scan.time)
+                logger.debug("set sample rate: %s", self.sample_rate)
             if scan is None:
+                logger.debug("no more scans...")
                 # eof
                 pass
             elif self.skip_scan(scan):
@@ -396,6 +420,11 @@ adj scan strt: %s
                 logger.info("starting scan block: %s", ft(scan.time[0]))
                 scan_list.append(scan)
                 period += self.get_period(scan)
+            elif len(scan.time) != self.sample_rate:
+                logger.info("ending block: sample rate changed "
+                            "from %d to %d Hz", self.sample_rate,
+                            len(scan.time))
+                self.next_scan = scan
             elif self.is_contiguous(last_scan, scan):
                 period += self.get_period(scan)
                 if period <= np.timedelta64(self.maxblock, 's'):
@@ -410,7 +439,7 @@ adj scan strt: %s
 
             if not minreached:
                 minblock = np.timedelta64(self.minblock, 's')
-                minreached = (period >= minblock)
+                minreached = period and (period >= minblock)
                 if minreached:
                     logger.info("minimum block period %s reached at %s "
                                 "with scan period %s",
@@ -419,6 +448,7 @@ adj scan strt: %s
 
             if minreached and scan_list:
                 # flush the scan list
+                logger.debug("yielding %d scans...", len(scan_list))
                 for onescan in scan_list:
                     yield onescan
                 scan_list.clear()
@@ -444,6 +474,7 @@ adj scan strt: %s
                 self.adjust_time = 0
                 period = np.timedelta64(0, 's')
 
+        logger.debug("read_scans() finished.")
         return None
 
     def get_block(self) -> xr.Dataset:
@@ -546,6 +577,7 @@ adj scan strt: %s
             ds[c].attrs['short_name'] = f'Eb.{height}.{self.SITE}'
             ds[c].attrs['site'] = self.SITE
             ds[c].attrs['height'] = height
+            ds[c].attrs['sample_rate_hz'] = np.int32(self.sample_rate)
 
         add_history_to_dataset(ds, "dump_hotfilm", self.command_line)
         return ds
