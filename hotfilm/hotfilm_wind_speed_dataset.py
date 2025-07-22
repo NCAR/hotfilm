@@ -75,6 +75,14 @@ class HotfilmWindSpeedDataset:
                            attrs={'long_name': long_name, 'units': units})
         rms.encoding['dtype'] = 'float32'
 
+        long_name = "R^2 coefficient of determination between calibration fit and sonic wind speed"
+        units = "1"
+        rsquared = xr.DataArray(name=f'r2_{name}',
+                                data=[hfc.rsquared_speed],
+                                coords={timed.name: timed},
+                                attrs={'long_name': long_name, 'units': units})
+        rsquared.encoding['dtype'] = 'float32'
+
         # include the eb and spd mean data as variables, with yet another time
         # dimension.
         ds = xr.Dataset({a.name: a, b.name: b,
@@ -83,7 +91,9 @@ class HotfilmWindSpeedDataset:
                          hfc.w.name: hfc.w,
                          npoints.name: npoints,
                          rms.name: rms,
-                         hfc.eb.name: hfc.eb, hfc.spd.name: hfc.spd})
+                         rsquared.name: rsquared,
+                         hfc.eb.name: hfc.eb,
+                         hfc.spd_sonic.name: hfc.spd_sonic})
         self.dataset = self.dataset.merge(ds, combine_attrs='identical')
 
     def add_wind_speed(self, hfc: HotfilmCalibration, eb: xr.DataArray):
@@ -217,7 +227,7 @@ class HotfilmWindSpeedDataset:
         eb = eb.sel(**calslice)
         spd = spd.sel(**calslice)
         hfc.eb = eb
-        hfc.spd = spd
+        hfc.spd_sonic = spd
         if f'npoints_{name}' not in self.dataset.data_vars:
             hfc._num_points = len(eb)
         else:

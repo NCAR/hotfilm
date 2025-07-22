@@ -2,7 +2,7 @@
 import logging
 import xarray as xr
 import numpy as np
-from hotfilm.utils import dt_string
+from hotfilm.utils import dt_string, r_squared
 
 from numpy.polynomial import Polynomial
 import matplotlib.axes
@@ -52,7 +52,7 @@ class HotfilmCalibration:
     def __init__(self):
         self.name = None
         self.eb = None
-        self.spd = None
+        self.spd_sonic = None
         self.u = None
         self.v = None
         self._num_points = None
@@ -62,6 +62,9 @@ class HotfilmCalibration:
         self.period_seconds = 300
         self.begin = None
         self.rms = None
+        self.rsquared_linear = None
+        self.rsquared_speed = None
+        self.standard_error = None
 
     def get_name(self):
         return self.name
@@ -85,7 +88,7 @@ class HotfilmCalibration:
         self.period_seconds = period.astype('timedelta64[s]').astype(int)
         end = self.get_end_time(begin)
         # get the wind component variables sliced to the current time period
-        u, v, w = sonics.get_wind_data(eb, 'uvw', begin, end)
+        u, v, w = sonics.get_wind_data(eb, list('uvw'), begin, end)
         self.u = self.resample_mean(u)
         self.v = self.resample_mean(v)
         self.w = self.resample_mean(w)
@@ -164,7 +167,7 @@ class HotfilmCalibration:
         ln = f'{spd.attrs["long_name"]} ({self.mean_interval_seconds}s mean)'
         spd.attrs['long_name'] = ln
         self.eb = eb
-        self.spd = spd
+        self.spd_sonic = spd
         pfit = Polynomial.fit(spd**0.45, eb**2, 1)
         logger.debug("polynomial fit: %s, window=%s, domain=%s",
                      pfit, pfit.window, pfit.domain)
@@ -175,21 +178,36 @@ class HotfilmCalibration:
                      "window=%s, domain=%s",
                      self.a, self.b, pfit, pfit.window, pfit.domain)
         self.calculate_rms()
+        self.calculate_rsquared()
         return self
 
-    def calculate_rms(self):
+    def calculate_rms(self) -> float:
         """
         Calculate the root mean square of the difference between the sonic
         wind speeds and the calibration curve.
         """
-        if self.spd is None or self.eb is None:
+        if self.spd_sonic is None or self.eb is None:
             raise Exception("no data to calculate RMS")
-        eb = self.eb
-        spd = self.speed(eb)
-        spd_sonic = self.spd
-        rms = np.sqrt(np.mean((spd_sonic - spd)**2))
-        self.rms = rms
+        rms = np.sqrt(np.mean((self.spd_sonic - self.speed(self.eb))**2))
+        self.rms = float(rms)
         return rms
+
+    def calculate_rsquared(self) -> None:
+        """
+        Calculate diagnostics for the quality of the fit based on R-squared
+        coefficient of determination and standard error of regression.  The
+        linear fit variables are expoential terms of the speed and voltage
+        variables, so R-squared seems more appropriate to use in the linear
+        space, but this also calculates a fit in the speed vs voltage
+        space.
+        """
+        if self.spd_sonic is None or self.eb is None:
+            raise Exception("no data to calculate R^2")
+        logger.debug("calculating R-squared in speed space...")
+        self.rsquared_speed = r_squared(self.spd_sonic, self.speed(self.eb))
+        logger.debug("calculating R-squared in linear space...")
+        self.rsquared_linear = r_squared(self.spd_sonic**0.45,
+                                         self.speed(self.eb)**0.45)
 
     def num_points(self):
         "Return the number of points used in this calibration."
@@ -206,7 +224,7 @@ class HotfilmCalibration:
         """
         Plot the calibration curve on the given axes.
         """
-        spd = self.spd
+        spd = self.spd_sonic
         eb = self.eb
         logger.debug("plotting calibration curve:\n-->eb=%s\n-->spd=%s",
                      eb, spd)
