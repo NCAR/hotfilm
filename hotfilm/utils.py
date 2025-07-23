@@ -82,7 +82,7 @@ def set_time_coordinate_units(cdim: xr.DataArray, units: str) -> None:
                               base.strftime("%Y-%m-%d %H:%M:%S+00:00")}
 
 
-def get_git_describe() -> str:
+def get_git_describe() -> str | None:
     """
     Get the git describe string for the current commit to provide extra
     context for the explicit version string, especially during development.
@@ -110,3 +110,37 @@ def add_history_to_dataset(ds: xr.Dataset, script: str,
     gd = get_git_describe()
     gd = f' ({gd})' if gd else ''
     ds.attrs[f'{script}_version'] = f'{VERSION}{gd}'
+
+
+def r_squared(actual: xr.DataArray, predicted: xr.DataArray) -> float:
+    """
+    Calculate the R-squared value between the actual and predicted values.
+    There is some suggestion on the web that R-squared is not appropriate
+    for nonlinear regressions, since the total sum of squares is the
+    difference from the mean, even though the fit may not be linear.  Maybe
+    the standard error of the regression would be safer.  (I think that is
+    the same as mean absolute error.)  However, the fit used by hotfilms is
+    in fact linear, except the variable terms are exponentials of the
+    measured variables, Eb^2 and Spd^0.45.
+
+    https://en.wikipedia.org/wiki/Coefficient_of_determination
+    https://blog.minitab.com/en/adventures-in-statistics-2/why-is-there-no-r-squared-for-nonlinear-regression
+    https://blog.minitab.com/en/adventures-in-statistics-2/regression-analysis-how-to-interpret-s-the-standard-error-of-the-regression
+    """
+    if actual.size != predicted.size:
+        raise ValueError("actual and predicted must have the same size")
+
+    actual_mean = np.mean(actual)
+    ss_total = np.sum((actual - actual_mean) ** 2)
+    ss_residual = np.sum((actual - predicted) ** 2)
+    logger.debug("r_squared(): mean_actual=%f, ss_total=%f, ss_residual=%f",
+                 actual_mean, ss_total, ss_residual)
+    logger.debug("actual: \n%s", actual)
+    logger.debug("predicted: \n%s", predicted)
+
+    rsquared = 0
+    # Force R^2 into interval [0, 1]
+    if ss_total > 0 and ss_residual < ss_total:
+        rsquared = 1 - (ss_residual / ss_total)
+    logger.debug("R-squared: %f", rsquared)
+    return rsquared

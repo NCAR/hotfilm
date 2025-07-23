@@ -2,6 +2,9 @@
 
 ## [unreleased] - Pending changes
 
+Add $R^2$ to the calibration quality of fit diagnostics.  See the notes in
+[Calibration.md](docs/Calibration.md).
+
 ## [1.3] - 2025-03-22
 
 The `calibrate_hotfilm.py` script has been created.  It reads hotfilm voltage

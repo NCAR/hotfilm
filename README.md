@@ -4,11 +4,17 @@ This repository contains code to use a [Labjack T7](https://labjack.com/t7) to
 sample at least 4 hotfilm AD channels at up to 2 KHz and record the channels
 to disk in NIDAS dat archive format.
 
+It also contains scripts and documentation for processing the raw voltage
+data, calibrating against sonic wind speed, and writing the data to NetCDF
+files.
+
 Links:
 
 - [Changelog](Changelog.md)
 - [Processing](docs/Processing.md): Process hot film data and write to text or
   netcdf.
+- [Calibration](docs/Calibration.md): Notes about how hot film voltags are
+  calibrated to derive wind speed.
 - [Installation](Install.md): Install the LabJack T7 hardware and hotfilm
   software dependencies.
 - [LabJack U6](labjack/LabJackU6.md): Notes on the older LabJack U6.

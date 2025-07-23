@@ -52,7 +52,7 @@ repository, generated as follows:
 
 ```sh
 cd tests/test_data
-ncks -d time,1800,2099 -v u_0_5m_t0,w_0_5m_t0,u_1m_t0,w_1m_t0,u_2m_t0,w_2m_t0,u_4m_t0,w_4m_t0 .../hr_qc_instrument/isfs_m2hats_qc_hr_inst_20230804_180000.nc isfs_m2hats_qc_hr_inst_uw_20230804_183000.nc
+ncks -d time,1800,2099 -v u_0_5m_t0,v_0_5m_t0,w_0_5m_t0,u_1m_t0,v_1m_t0,w_1m_t0,u_2m_t0,v_2m_t0,w_2m_t0,u_4m_t0,v_4m_t0,w_4m_t0 .../hr_qc_instrument/isfs_m2hats_qc_hr_inst_20230804_180000.nc isfs_m2hats_qc_hr_inst_uvw_20230804_183000.nc
 ncks -d time,0,700000 .../hotfilm_20230804_182917_120.nc hotfilm_20230804_182917_6.nc
 ```
 
@@ -64,13 +64,13 @@ example below uses the test data mentioned above to generate one calibration
 over a 5-minute period for each height:
 
 ```sh
-./calibrate_hotfilm.py tests/test_data/hotfilm_20230804_182917_6.nc tests/test_data/isfs_m2hats_qc_hr_inst_uw_20230804_183000.nc --plot
+./calibrate_hotfilm.py tests/test_data/hotfilm_20230804_182917_6.nc tests/test_data/isfs_m2hats_qc_hr_inst_uvw_20230804_183000.nc --plot
 ```
 
 This command writes the calibrated hot film wind speeds to netcdf:
 
 ```sh
-./calibrate_hotfilm.py tests/test_data/hotfilm_20230804_182917_6.nc tests/test_data/isfs_m2hats_qc_hr_inst_uw_20230804_183000.nc --netcdf hotfilm_wind_speed_%Y%m%d_%H%M%S.nc
+./calibrate_hotfilm.py tests/test_data/hotfilm_20230804_182917_6.nc tests/test_data/isfs_m2hats_qc_hr_inst_uvw_20230804_183000.nc --netcdf hotfilm_wind_speed_%Y%m%d_%H%M%S.nc
 ```
 
 The netcdf output contains a wind speed variable for each hotfilm channel,

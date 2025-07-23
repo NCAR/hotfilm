@@ -27,12 +27,22 @@ class CalibrateHotfilm:
         self.calperiod = np.timedelta64(300, 's')
         self.maxcals = 0
         self.command_line = None
+        # these are the time window to process, if set
+        self.start = None
+        self.finish = None
         self.sonics = None
         self.inputs = None
         self.netcdf = 'hotfilm_wind_speed_%Y%m%d_%H%M%S.nc'
         self.images = 'hotfilm_calibrations_%Y%m%d_%H%M%S.png'
         # if true, save calibration plots when generated
         self.plot = False
+
+    def set_process_window(self, start: str, finish: str):
+        """
+        Set the time window to process, as strings in ISO format.
+        """
+        self.start = np.datetime64(start)
+        self.finish = np.datetime64(finish)
 
     def set_command_line(self, argv):
         command_line = " ".join([f"'{arg}'" if ' ' in arg else arg
@@ -58,6 +68,11 @@ class CalibrateHotfilm:
         ncals = 0
         logger.info("begin=%s, end=%s, ncals=%d", begin, end, maxcals)
         while begin < end and (not maxcals or ncals < maxcals):
+            if self.start and begin < self.start:
+                begin = begin + calperiod
+                continue
+            if self.finish and begin + calperiod > self.finish:
+                break
             cals = []
             for ch in films.dataset.data_vars:
                 eb = films.get_variable(ch)
