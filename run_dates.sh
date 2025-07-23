@@ -4,17 +4,6 @@
 # mamba activate hotfilm
 # source /opt/nidas/bin/setup_nidas.sh
 
-# Dates of interest
-dates=`cat <<EOF
-20230804
-20230827
-20230905
-20230915
-20230919
-20230920
-20230922
-EOF`
-
 # Output will go into subdirectories of the current directory by default.
 
 hotfilmdir=/opt/local/m2hats/hotfilm
@@ -32,18 +21,33 @@ plot_output=./windspeed/$date/plots
 plot_output_spec=${plot_output}/hotfilm_calibrations_%Y%m%d_%H%M%S.png
 
 dumphotfilm="${hotfilmdir}/dump_hotfilm.py --log info"
-calibrate="${hotfilmdir}/calibrate_hotfilm.py --log info --sonics ${sonics} --plot --calibrate"
+calibrate="${hotfilmdir}/calibrate_hotfilm.py --log info --plot --calibrate"
 
+do_dump=0
+do_calibrate=0
+dates=""
 
-get_inputs()
-{
-    echo "$@" | awk '{ print $1; }'
+# Default dates
+get_dates() {
+cat <<EOF
+20230803
+20230804
+20230805
+20230827
+20230905
+20230915
+20230919
+20230920
+20230921
+20230922
+EOF
 }
 
 
 run_dump() # date
 {
     date="$1"
+    echo "Dumping hotfilm data for $date ..."
     set -x
     mkdir -p ${hotfilm_output}
     $dumphotfilm --netcdf ${hotfilm_output_spec} \
@@ -54,16 +58,28 @@ run_dump() # date
 run_calibrate() # date
 {
     date="$1"
+    echo "Calibrating hotfilm data for $date ..."
     calibrated_output=./windspeed/$date
     calibrated_output_spec=${calibrated_output}/${speed_spec}
     plot_output=./windspeed/$date/plots
     plot_output_spec=${plot_output}/${plot_spec}
+
+    # make sure corresponding sonic data files are copied into this run
+    # directory.  I'm not sure if reading the sonic data from the local
+    # copy is any slower than reading directly from the flash filesystem,
+    # but this at least makes the runs more self-contained, and this
+    # includes the sonic data in the final output when linked to the web
+    # filesystem.
+    local_sonics="hr_qc_instrument"
+    mkdir -p "${local_sonics}"
+    rsync -av $sonics/isfs_m2hats_qc_hr_inst_${date}_*.nc "${local_sonics}/"
 
     set -x
     mkdir -p ${calibrated_output}
     mkdir -p ${plot_output}
     $calibrate --netcdf ${calibrated_output_spec} \
         --images ${plot_output_spec} \
+        --sonics ${local_sonics} \
         ${hotfilm_output}/hotfilm_${date}_*.nc
 }
 
@@ -71,9 +87,49 @@ run_calibrate() # date
 run_date() # date
 {
     date="$1"
-    run_dump $date
-    run_calibrate $date
+    echo "Running date: $date"
+    if [ $do_dump -ne 0 ] ; then
+        run_dump $date
+    fi
+    if [ $do_calibrate -ne 0 ] ; then
+        run_calibrate $date
+    fi
 }
+
+
+while [[ $# -gt 0 ]] ; do
+    case "$1" in
+        --dump)
+            do_dump=1
+            shift
+            ;;
+        --calibrate)
+            do_calibrate=1
+            shift
+            ;;
+        --dates)
+            get_dates
+            exit 0
+            ;;
+        *)
+            if [[ -z "$dates" ]] ; then
+                dates="$1"
+            else
+                dates="$dates $1"
+            fi
+            shift
+            ;;
+    esac
+done
+
+if [ $do_dump -eq 0 ] && [ $do_calibrate -eq 0 ] ; then
+    do_dump=1
+    do_calibrate=1
+fi
+
+if [ -z "$dates" ]; then
+    dates=$(get_dates)
+fi
 
 for day in $dates ; do
     run_date $day >& run_dates.${day}.log &
