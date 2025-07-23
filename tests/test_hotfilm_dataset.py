@@ -167,19 +167,39 @@ def plot_calibration(hfc: HotfilmCalibration):
     if not _plot_rsquared:
         return
     import matplotlib.pyplot as plt
-    plt.plot(hfc.eb, hfc.spd_sonic, 'o', label='sonic speed')
-    plt.plot(hfc.eb, hfc.speed(hfc.eb), 'r-', label='predicted speed')
-    plt.plot(hfc.eb, float(hfc.spd_sonic.mean()) * np.ones_like(hfc.eb),
-             'g--', label='mean speed')
-    print("spd_sonic:\n", hfc.spd_sonic)
-    print("hfc.speed(hfc.eb):\n", hfc.speed(hfc.eb))
-    plt.plot(hfc.eb, (hfc.spd_sonic - hfc.speed(hfc.eb))**2, 'k--',
-             label='residual speed')
-    plt.xlabel('Voltage (V)')
-    plt.ylabel('Speed (m/s)')
-    plt.title('Hotfilm Calibration: R²spd=%.2f, R²fit=%.2f, RMS=%.2f m/s' %
-              (hfc.rsquared_speed, hfc.rsquared_linear, hfc.rms))
-    plt.legend()
+    fig = plt.figure()
+    axs = fig.subplots(2, 1, squeeze=False)
+    spdplot = axs[0, 0]
+    fitplot = axs[1, 0]
+
+    spdplot.plot(hfc.eb, hfc.spd_sonic, 'o', label='sonic speed')
+    spdplot.plot(hfc.eb, hfc.speed(hfc.eb), 'r-', label='predicted speed')
+    spdplot.plot(hfc.eb, float(hfc.spd_sonic.mean()) * np.ones_like(hfc.eb),
+                 'g--', label='mean speed')
+    spdplot.plot(hfc.eb, (hfc.spd_sonic - hfc.speed(hfc.eb))**2, '.',
+                 label='residual speed')
+    spdplot.set_xlabel('Voltage (V)')
+    spdplot.set_ylabel('Speed (m/s)')
+    spdplot.set_title('Hotfilm Calibration: $R_{{spd}}^{{2}}$=%.2f, $R_{{fit}}^{{2}}$=%.2f, RMS=%.2f m/s' %
+                      (hfc.rsquared_speed, hfc.rsquared_linear, hfc.rms))
+    spdplot.legend()
+
+    linvolts = hfc.eb**2
+    linsonic = hfc.spd_sonic**0.45
+    fitplot.plot(linvolts, linsonic, 'o', label='$spd_{{sonic}}^{{0.45}}$')
+    linfit = hfc.speed(hfc.eb)**0.45
+    fitplot.plot(linvolts, linfit, 'r-', label='$spd_{{fit}}^{{0.45}}$')
+    fitplot.plot(linvolts, float(linsonic.mean()) * np.ones_like(linvolts),
+                 'g--', label='mean')
+    fitplot.plot(linvolts, (linsonic - linfit)**2, '.',
+                 label='residual $R_{{fit}}^{{2}}$=%.2f' % hfc.rsquared_linear)
+    fitplot.plot(linvolts, (linvolts - hfc.a) / hfc.b, 'k-.',
+                 label=f'$spd^{{0.45}} = eb^2 * {hfc.b:.2f}_{{b}} + {hfc.a:.2f}_{{a}}$')
+    fitplot.set_xlabel('$Volts^{{2}}$')
+    fitplot.set_ylabel('$Speed^{{0.45}}$')
+    fitplot.legend()
+
+    plt.tight_layout()
     plt.show()
 
 
@@ -201,16 +221,14 @@ def test_rsquared():
     logger.debug("test_rsquared: calibrating speed with noise...")
     # add noise to the volts so the fit should be the same and the mean
     # should be the same, but the rsquared should be lower and predictable.
-    noise = 2
+    noise = 1
     noise_array = np.ones_like(spd)
     noise_array[np.arange(len(noise_array)) % 2 == 1] = -1
     noise_array = noise_array * noise
     logger.debug("spd before adding noise:\n%s", spd)
     spd_noisy = spd.copy()
     spd_noisy += noise_array
-    # resample noise to 1s to get the xarray dimensions to match when
-    # differenced with the predicted speed
-    spd_noisy = hfc.resample_mean(spd_noisy)
+
     logger.debug("testing speed with noise:\n%s", spd_noisy)
     assert noise_array.mean() == pytest.approx(0)
     assert noise_array.std() == pytest.approx(noise)
@@ -231,7 +249,9 @@ def test_rsquared():
                  float(hfc.spd_sonic.mean()), float(res_ss), float(spd_ss))
     rsquared_expected = 1 - (res_ss / spd_ss)
 
-    hfc.spd_sonic = spd_noisy
+    # resample noise to 1s to get the xarray dimensions to match when
+    # differenced with the predicted speed
+    hfc.spd_sonic = hfc.resample_mean(spd_noisy)
     hfc.calculate_rsquared()
     hfc.calculate_rms()
     plot_calibration(hfc)
@@ -239,6 +259,12 @@ def test_rsquared():
     assert hfc.rsquared_speed == pytest.approx(rsquared_expected)
     # rms should equal noise
     assert hfc.rms == pytest.approx(noise)
+
+    # when calibrating with the noisy speed, the fit is different and the
+    # rsquared is different, but the RMS should be within 5% of the noise.
+    hfc.calibrate(spd_noisy, volts, dtime[0], dtime[-1])
+    plot_calibration(hfc)
+    assert hfc.rms == pytest.approx(noise, abs=noise*0.05)
 
 
 if __name__ == "__main__":

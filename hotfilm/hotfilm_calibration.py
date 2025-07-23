@@ -240,7 +240,8 @@ class HotfilmCalibration:
         # plot the data
         if self.rms is None:
             self.calculate_rms()
-        label = 'mean eb vs $|(u,w)|$, rms=%.2f m/s' % self.rms
+        label = ('mean $E_b$ vs $|(u,w)|$, RMS=%.2f m/s, $R_{{spd}}^2$=%.2f' %
+                 (self.rms, self.rsquared_speed))
         ax.scatter(spd, eb, label=label)
         ax.set_xlabel(f"{spd.name} ({spd.attrs['units']})")
         ax.set_ylabel(f"{eb.name} ({eb.attrs['units']})")
