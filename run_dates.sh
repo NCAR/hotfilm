@@ -109,6 +109,12 @@ run_date() # date
 }
 
 
+index_dirs() {
+    pwd > index-dirs.txt
+    (set -x; python ~isfs/webIndex.py index-dirs.txt)
+}
+
+
 while [[ $# -gt 0 ]] ; do
     case "$1" in
         --dump)
@@ -125,6 +131,10 @@ while [[ $# -gt 0 ]] ; do
             ;;
         --dates)
             get_dates
+            exit 0
+            ;;
+        --index)
+            index_dirs
             exit 0
             ;;
         *)
