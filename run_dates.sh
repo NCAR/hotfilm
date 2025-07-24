@@ -110,8 +110,11 @@ run_date() # date
 
 
 index_dirs() {
-    pwd > index-dirs.txt
-    (set -x; python ~isfs/webIndex.py index-dirs.txt)
+    # Use an extension which webIndex.py does not index, and since it is
+    # easy to recreate and otherwise not needed, delete it after indexing.
+    pwd > index-dirs.tmp
+    (set -x; python ~isfs/webIndex.py index-dirs.tmp)
+    rm -f index-dirs.tmp
 }
 
 
