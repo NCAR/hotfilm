@@ -4,6 +4,7 @@ import tempfile
 import logging
 import pandas as pd
 import xarray as xr
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +36,11 @@ class OutputPath:
         Path(self.tfile.name).unlink(missing_ok=True)
         self.tfile = None
 
-    def finish(self, minutes: int = None) -> Path:
+    def finish(self, period: np.timedelta64 = None) -> Path:
         path = self.path
+        minutes = None
+        if period is not None:
+            minutes = np.timedelta64(period, 'm').astype(int)
         if minutes is None:
             fpath = path.name
         else:

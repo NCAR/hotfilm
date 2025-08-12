@@ -2,6 +2,14 @@
 
 ## [unreleased] - Pending changes
 
+The `dump_hotfilm.py` script now writes out the hotfilm voltage timestamps
+exactly as they were recorded in the raw NIDAS data files, instead of
+adjusting the timestamps so contiguous samples had a regularly spaced time
+interval matching the nominal sample frequency.  This means that even
+continuously sampled data will have occasional jumps in timestamps greater
+than the expected sample interval, due to the ADC clock drifting relative to
+GPS time.  The previous behavior can be selected with `--keep-contiguous`.
+
 Add $R^2$ to the calibration quality of fit diagnostics.  See the notes in
 [Calibration.md](docs/Calibration.md).
 

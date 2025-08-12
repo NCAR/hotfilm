@@ -17,7 +17,9 @@ class IsfsDataset:
 
     DEFAULT_PATH_SPEC = "isfs_m2hats_qc_hr_inst_%Y%m%d_%H0000.nc"
 
-    def __init__(self, pathspec: str = None):
+    dataset: xr.Dataset | None
+
+    def __init__(self, pathspec: str | None = None):
         self.dataset = None
         self.timev = None
         self.timed = None
@@ -30,7 +32,7 @@ class IsfsDataset:
         elif Path(pathspec).is_dir():
             self.pathspec = str(Path(pathspec) / self.DEFAULT_PATH_SPEC)
 
-    def lookup_filepath(self, when: np.datetime64) -> str:
+    def lookup_filepath(self, when: np.datetime64) -> Path | None:
         """
         Return the filename for the given time by formatting the pathspec with
         @p when.
@@ -122,7 +124,7 @@ class IsfsDataset:
         return dsv
 
     def get_wind_variables(self, variable: xr.DataArray,
-                           components: list) -> tuple[xr.DataArray]:
+                           components: list[str]) -> list[xr.DataArray]:
         """
         Given a variable with a height and site attribute, return the sonic
         wind component variables for that height and for the components
@@ -133,9 +135,9 @@ class IsfsDataset:
         return [self.get_variable(f'{c}_{height}_{site}') for c in components]
 
     def get_wind_data(self, variable: xr.DataArray,
-                      components: list,
+                      components: list[str],
                       begin: np.datetime64,
-                      end: np.datetime64) -> tuple[xr.DataArray]:
+                      end: np.datetime64) -> list[xr.DataArray]:
         """
         Find the requested wind variables for the specific time range,
         closing the current file and opening a new one as needed.

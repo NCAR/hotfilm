@@ -55,20 +55,18 @@ class time_formatter:
     EPOCH = np.datetime64(dt.datetime(1970, 1, 1))
     FLOAT_SECONDS = "%s.%f"
 
-    def __init__(self, timeformat: str, first: np.datetime64, interval: int):
+    timeformat: str
+    first: np.datetime64
+
+    def __init__(self, timeformat: str, first: np.datetime64):
         self.timeformat = timeformat
         self.first = first
-        self.interval = interval
         self.formatter = None
-        self.base_usecs = None
-        self.i = 0
         mformat = self.timeformat
         if self.timeformat == self.ISO:
             self.formatter = self.format_iso
         elif mformat == self.FLOAT_SECONDS:
-            self.base_usecs = td_to_microseconds(first - self.EPOCH)
             self.formatter = self.format_sf
-            self.i = 0
         elif "%s" in mformat:
             self.formatter = self.format_s
         else:
@@ -91,9 +89,8 @@ class time_formatter:
         return pd.to_datetime(when).isoformat()
 
     def format_sf(self, when: np.datetime64):
-        "Interpolate %s%f time format by exploiting regular interval."
-        usecs = self.base_usecs + self.i * self.interval
-        self.i += 1
+        "Interpolate %s%f time format."
+        usecs = td_to_microseconds(when - self.EPOCH)
         return "%d.%06d" % (usecs // 1e6, usecs % 1e6)
 
     def __call__(self, when):
@@ -113,10 +110,14 @@ class ReadHotfilm:
     Read the hotfilm 1-second time series from data_dump.
     """
 
+    cmd: List[str]
     adjust_time: int
-    scan: xr.Dataset
-    next_scan: xr.Dataset
+    scan: Optional[xr.Dataset]
+    next_scan: Optional[xr.Dataset]
     command_line: str
+    begin: Optional[np.datetime64]
+    end: Optional[np.datetime64]
+    keep_contiguous: bool
 
     # really these should come from the xml, but hardcode for now
     HEIGHTS = {
@@ -129,7 +130,7 @@ class ReadHotfilm:
 
     def __init__(self):
         self.source = ["sock:192.168.1.220:31000"]
-        self.cmd = None
+        self.cmd = []
         self.dd = None
         # default to all channels, otherwise a list of channel names
         self.channels = None
@@ -153,11 +154,15 @@ class ReadHotfilm:
         # iterator which returns the next data line
         self.line_iterator = None
         self.precision = 8
-        self.command_line = None
+        self.command_line = ""
         # keep track of the sample rate in case it changes
-        self.sample_rate = None
+        self.sample_rate = 0
+        # if true, adjust sample times in contiguous blocks to keep them
+        # exactly at the nominal sample rate, even when the labjack clock
+        # drifts relative to GPS.
+        self.keep_contiguous = False
 
-    def set_command_line(self, argv):
+    def set_command_line(self, argv: List[str]):
         self.command_line = " ".join([f"'{arg}'" if ' ' in arg else arg
                                       for arg in argv])
 
@@ -177,7 +182,7 @@ class ReadHotfilm:
 
     def format_time(self, when: np.datetime64):
         "Convenient shortcut, but not optimal."
-        return time_formatter(self.timeformat, when, 0)(when)
+        return time_formatter(self.timeformat, when)(when)
 
     def set_source(self, source):
         logger.info("setting sources: %s", ",".join(source))
@@ -205,6 +210,8 @@ class ReadHotfilm:
         """
         Return the next selected channel as a DataArray.
         """
+        if not self.line_iterator:
+            return None
         data = None
         while data is None:
             if not (line := next(self.line_iterator, None)):
@@ -236,7 +243,7 @@ class ReadHotfilm:
         # logger.debug("skip_scan is '%s' on data: %s", skip, scan)
         return skip
 
-    def get_scan(self) -> xr.Dataset:
+    def get_scan(self) -> Optional[xr.Dataset]:
         """
         Return a Dataset with all the channels in a single scan.  A scan is
         all channels with the same timestamp and the same sample rate.
@@ -252,14 +259,13 @@ class ReadHotfilm:
                 break
             when = data.time[0]
             if self.scan is None or self.scan.time[0] != when:
-                logger.debug("starting scan with %s at %s",
-                             data.name, ft(when))
+                logger.debug("scan %s at %s", data.name, ft(when))
                 # the current scan, if any, is what will be returned
                 scan = self.scan
                 self.scan = xr.Dataset({data.name: data})
             elif len(self.scan.time) != len(data.time):
                 # sample rate changed, so return the current scan
-                logger.debug("starting scan with %s at %s: "
+                logger.debug("scan %s at %s: "
                              "sample rate changed from %d to %d Hz",
                              data.name, ft(when),
                              len(self.scan.time), len(data.time))
@@ -268,8 +274,7 @@ class ReadHotfilm:
             else:
                 # join this channel with existing scan
                 name = data.name
-                logger.debug("adding %s to current scan at %s",
-                             name, ft(when))
+                logger.debug("add %s to scan at %s", name, ft(when))
                 self.scan[name] = data
         return scan
 
@@ -298,12 +303,13 @@ class ReadHotfilm:
         """
         next = scan.time[0] + np.timedelta64(self.adjust_time, 'us')
         interval = self.get_interval(ds)
+        interval_usecs = interval.astype(int)
         # the expected start of the next scan is last + interval, and the
         # shift between expected time and actual time is calculated with the
         # current time adjustment included.  the shift is how much to add to
         # the next frame to match the expected next times.
         last = ds.time[-1]
-        xnext = last + np.timedelta64(interval, 'us')
+        xnext = last + interval
         shift = int(np.round((next - xnext) / np.timedelta64(1, 'us')))
         # if the difference is only an interval or two, then assume the scans
         # are continguous but the PPS shifted, and set the adjustment so next
@@ -317,14 +323,15 @@ scan expected: %s
 adj scan strt: %s
  shift (usec): %d""",
                      pd.to_timedelta((next - xnext).data), self.adjust_time,
-                     ft(ds.time[-1]), interval, ft(xnext), ft(next), shift)
+                     ft(ds.time[-1]), interval_usecs, ft(xnext), ft(next),
+                     shift)
 
         # include the shift in the new adjustment, then check if the
         # adjustment has grown too large or the latest shift is too large.
         self.adjust_time -= shift
         if shift == 0:
             pass
-        elif abs(shift) > 2e6 + 2*interval:
+        elif abs(shift) > 2e6 + 2*interval_usecs:
             # sometimes there are consecutive scans which get shifted even by
             # two seconds, but we can be relatively confident they are
             # contiguous if there are no dummy scans between them.
@@ -349,51 +356,60 @@ adj scan strt: %s
 
         return shift == 0
 
-    def get_interval(self, ds: xr.Dataset) -> int:
+    def get_interval(self, ds: xr.Dataset) -> np.timedelta64:
         "Return microseconds between scans, the inverse of scan rate."
         td = ds.time[-1] - ds.time[-2]
-        return int(td / np.timedelta64(1, 'us'))
+        return np.timedelta64(td.data, 'us')
 
-    def get_period(self, ds: xr.Dataset,
-                   scan: xr.Dataset = None) -> np.timedelta64:
+    def get_period_end(self, ds: xr.Dataset) -> np.timedelta64:
         """
-        Return the time period covered by this frame and given scan, including
-        the interval after the last point.
+        Return the end of time period covered by this scan, including the
+        interval after the last point.
         """
-        if scan is None:
-            scan = ds
-        first = ds.time[0]
-        last = scan.time[-1]
-        interval = self.get_interval(ds)
-        period = last - first + np.timedelta64(interval, 'us')
+        last = ds.time[-1]
+        end = last + self.get_interval(ds)
         # Using item() returns a *scalar*, which in this case would be the
         # number of nanoseconds in the timedelta64.  We want the actual
         # underlying timedelta64 type, so use .data.
-        #
-        # logger.debug("get_period() -> %s", period.data)
-        return period.data
+        return end.data
 
     def read_scans(self) -> Generator[xr.Dataset, None, None]:
         """
         Yield the minimum time period of scans and the following scans until
-        there is a break.
+        there is a break.  A break happens for any of these reasons:
+            - there are no more scans
+            - keep_contiguous is false and the next scan is not contiguous
+            - the sample rate changes
+            - the maximum block period is reached
+        The minimum block period must be reached before any scans are
+        returned.  If the minimum period is not reached before a break, then
+        the search starts over for the next block.
         """
         logger.debug("starting read_scans()...")
         self.adjust_time = 0
         # accumulate scans in a list until the minimum period is reached.
         minreached = False
+        minblock = np.timedelta64(self.minblock, 's')
+        maxblock = np.timedelta64(self.maxblock, 's')
         scan_list = []
         last_scan = None
-        # period tracks the length of the current block so far
-        period = np.timedelta64(0, 's')
+        period_start = None
+        period = np.timedelta64(0, 'us')
         # reset sample rate so it will be set by next scan.
-        self.sample_rate = None
+        self.sample_rate = 0
+
+        # keep reading until a block of scans has been yielded or else there
+        # are no more scans to read.
         while True:
+            # use a pending scan if set, otherwise read the next one.
             scan = self.next_scan
-            skipped = False
             if scan is None:
                 scan = self.get_scan()
+            # the scan will either be taken, deferred, or skipped.
             self.next_scan = None
+            take_scan = None
+            if scan and period_start is None:
+                period_start = scan.time[0].data
             if scan:
                 logger.debug("handling next scan: %d channels of "
                              "%d samples at %s",
@@ -402,6 +418,8 @@ adj scan strt: %s
             if scan and not self.sample_rate:
                 self.sample_rate = len(scan.time)
                 logger.debug("set sample rate: %s", self.sample_rate)
+
+            # now check for a break in the scans
             if scan is None:
                 logger.debug("no more scans...")
                 # eof
@@ -414,46 +432,52 @@ adj scan strt: %s
                 # computed timestamp is likely wrong too.
                 logger.error("skipping scan with dummy values at %s",
                              ft(scan.time[0]))
-                scan = None
-                skipped = True
-            elif not scan_list and not minreached:
-                logger.info("starting scan block: %s", ft(scan.time[0]))
-                scan_list.append(scan)
-                period += self.get_period(scan)
+                # if contiguous scans not required, just keep going
+                if not self.keep_contiguous:
+                    continue
             elif len(scan.time) != self.sample_rate:
                 logger.info("ending block: sample rate changed "
                             "from %d to %d Hz", self.sample_rate,
                             len(scan.time))
                 self.next_scan = scan
-            elif self.is_contiguous(last_scan, scan):
-                period += self.get_period(scan)
-                if period <= np.timedelta64(self.maxblock, 's'):
+            elif (self.keep_contiguous and last_scan and
+                  not self.is_contiguous(last_scan, scan)):
+                self.next_scan = scan
+            else:
+                take_scan = scan
+
+            # if the current scan passes the other checks, check the period.
+            if take_scan:
+                if not scan_list and not minreached:
+                    logger.info("starting scan block: %s", ft(scan.time[0]))
+                period = self.get_period_end(scan) - period_start
+                period = np.timedelta64(period, 's')
+                if period <= maxblock:
                     scan_list.append(scan)
                 else:
+                    logger.info("maximum block period %s exceeded at %s",
+                                maxblock, ft(scan.time[0]))
+                    take_scan = None
                     self.next_scan = scan
-            else:
-                # break here, but save scan to start next block
-                self.next_scan = scan
 
             last_scan = scan_list[-1] if scan_list else None
 
-            if not minreached:
-                minblock = np.timedelta64(self.minblock, 's')
-                minreached = period and (period >= minblock)
-                if minreached:
+            # see if the pending scans have reached minimum period yet
+            if scan_list and not minreached:
+                minreached = (period >= minblock)
+                if minreached and last_scan:
                     logger.info("minimum block period %s reached at %s "
                                 "with scan period %s",
-                                minblock, ft(last_scan.time[-1]),
-                                np.timedelta64(period, 's'))
+                                minblock, ft(last_scan.time[-1]), period)
 
-            if minreached and scan_list:
+            if scan_list and minreached:
                 # flush the scan list
                 logger.debug("yielding %d scans...", len(scan_list))
                 for onescan in scan_list:
                     yield onescan
                 scan_list.clear()
 
-            if scan is None or self.next_scan is not None:
+            if take_scan is None:
                 # a block is ending.  if there are still scans in the list,
                 # they were not enough to make a minimum block.
                 if scan_list:
@@ -463,21 +487,18 @@ adj scan strt: %s
                                  "from %s to %s", period, ft(first), ft(last))
                     scan_list.clear()
 
-                # if a block of scans has already been returned, or else there
-                # is no chance of more blocks because no scan is pending and
-                # this one was not skipped, then return None to signal the end
-                # of this current block.
-                if minreached or (self.next_scan is None and not skipped):
-                    break
-
-                # reset the time adjustment and period for the next block
+                # reset the time adjustment for the next block
                 self.adjust_time = 0
-                period = np.timedelta64(0, 's')
+
+                # return if a block was yielded and but has now ended or else
+                # there are no more scans left to handle
+                if minreached or scan is None:
+                    break
 
         logger.debug("read_scans() finished.")
         return None
 
-    def get_block(self) -> xr.Dataset:
+    def get_block(self) -> Optional[xr.Dataset]:
         """
         Read a block of scans and return them as a single Dataset.
         """
@@ -533,9 +554,8 @@ adj scan strt: %s
             for data in self.read_scans():
                 if header is None:
                     header = data
-                    interval = self.get_interval(data)
                     when = data.time.data[0]
-                    tformat = time_formatter(self.timeformat, when, interval)
+                    tformat = time_formatter(self.timeformat, when)
                     tfile = outpath.start(filespec, data)
                     out = open(tfile.name, "w", buffering=32*65536)
                     out.write("time")
@@ -557,9 +577,8 @@ adj scan strt: %s
             if out:
                 out.close()
                 # insert the file length into the final filename
-                period = pd.to_timedelta(self.get_period(header, last))
-                minutes = period.total_seconds() // 60
-                outpath.finish(minutes)
+                period = self.get_period_end(last) - header.time[0].data
+                outpath.finish(period)
 
             if header is None:
                 break
@@ -602,8 +621,7 @@ adj scan strt: %s
             if tfile:
                 ds = xr.concat(datasets, dim='time')
                 # get length in minutes before time coordinate is converted
-                minutes = self.get_period(ds)
-                minutes = pd.to_timedelta(minutes).total_seconds() // 60
+                period = self.get_period_end(ds) - ds.time[0].data
                 ds = self._add_netcdf_attrs(ds)
                 # make sure data variables have type float32
                 encodings = {
@@ -612,7 +630,7 @@ adj scan strt: %s
                 }
                 ds.to_netcdf(tfile.name, engine='netcdf4', format='NETCDF4',
                              encoding=encodings)
-                outpath.finish(minutes)
+                outpath.finish(period)
 
             if tfile is None:
                 break
@@ -637,6 +655,10 @@ def apply_args(hf: ReadHotfilm, argv: Optional[List[str]]):
                         "Useful for simulating real-time data when called "
                         "from the web plotting app with data files.",
                         default=0)
+    parser.add_argument("--keep-contiguous", action="store_true",
+                        help="Adjust sample times in contiguous blocks to "
+                        "keep them exactly at the nominal sample rate, "
+                        "even when the labjack clock drifts relative to GPS.")
     parser.add_argument("--min", type=int, default=hf.minblock//60,
                         help="Minimum minutes to write into a file.")
     parser.add_argument("--max", type=int, default=hf.maxblock//60,
@@ -667,10 +689,11 @@ def apply_args(hf: ReadHotfilm, argv: Optional[List[str]]):
 
     hf.set_time_format(args.timeformat)
     hf.delay = args.delay
+    hf.keep_contiguous = args.keep_contiguous
     return args
 
 
-def main(argv: Optional[List[str]]):
+def main(argv: List[str]):
     hf = ReadHotfilm()
     args = apply_args(hf, argv[1:])
     # record the command line arguments for the history attribute

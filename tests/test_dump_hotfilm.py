@@ -70,7 +70,7 @@ def test_parse_line():
 def test_get_period():
     hf = ReadHotfilm()
     data = hf.parse_line(_scan)
-    period = hf.get_period(data)
+    period = (hf.get_period_end(data) - data.time[0]).data
     interval = hf.get_interval(data)
     assert interval == 125000
     assert pd.to_timedelta(period).total_seconds() == 1
@@ -187,6 +187,7 @@ def test_get_block():
     hf = ReadHotfilm()
     hf.select_channels([1])
     hf.minblock = 0
+    hf.keep_contiguous = True
     hf.line_iterator = iter(_block_lines)
     logger.debug("first get_block() call...")
     ds = hf.get_block()
@@ -207,6 +208,7 @@ def test_short_blocks():
 
 def test_long_enough_blocks():
     hf = ReadHotfilm()
+    hf.keep_contiguous = True
     hf.select_channels([1])
     hf.minblock = 3
     hf.line_iterator = iter(_block_lines)
@@ -230,6 +232,7 @@ _skip_lines = """
 
 def test_skip_blocks():
     hf = ReadHotfilm()
+    hf.keep_contiguous = True
     hf.select_channels([1])
     hf.minblock = 1
     hf.line_iterator = iter(_skip_lines)
@@ -290,31 +293,15 @@ def remove_attributes(ds: xr.Dataset, attrs: list[str]) -> None:
             del ds.attrs[att]
 
 
-_this_dir = Path(__file__).parent
-_test_data_dir = Path("test_data")
-_test_out_dir = Path("test_out")
-
-def test_netcdf_output():
-    datfile = _test_data_dir / "channel2_20230804_180000_05.dat"
-    (_this_dir / _test_out_dir).mkdir(exist_ok=True)
-    xout = _this_dir / _test_out_dir / "channel2_20230804_180000_005.nc"
-    xout.unlink(missing_ok=True)
-    args = ["--netcdf", _test_out_dir / "channel2_%Y%m%d_%H%M%S.nc",
-            "--channel", "2", datfile]
-    args = [str(arg) for arg in args]
-    logger.debug("dumping: %s", " ".join(args))
-    try:
-        with contextlib.chdir(_this_dir):
-            main(['dump_hotfilm.py'] + args)
-    except FileNotFoundError as fe:
-        if fe.filename == "data_dump":
-            pytest.xfail("data_dump not found.")
-        raise
+def compare_netcdf(xout: Path, xbase: Path):
+    """
+    Compare two netcdf files and fail the test if and differences found.
+    The expected baseline output is at @p xbase, and the test output is at
+    @p xout.
+    """
     assert xout.exists() and xout.stat().st_size > 0
     # make sure we get permissions ugo=r also
     assert xout.stat().st_mode & 0o444 == 0o444
-
-    xbase = _this_dir / "baseline" / "channel2_20230804_180000_005.nc"
     tds = xr.open_dataset(xout)
     xds = xr.open_dataset(xbase)
     ignores = ["history", "command_line", "version"]
@@ -343,6 +330,53 @@ def test_netcdf_output():
     logger.debug("comparing: %s", " ".join(args))
     assert sp.check_call(args) == 0
     pytest.fail("datasets not identical, but nc_compare returned 0!")
+
+
+_this_dir = Path(__file__).parent
+_test_data_dir = Path("test_data")
+_test_out_dir = Path("test_out")
+
+def test_netcdf_output():
+    datfile = _test_data_dir / "channel2_20230804_180000_05.dat"
+    (_this_dir / _test_out_dir).mkdir(exist_ok=True)
+    xout = _this_dir / _test_out_dir / "channel2_20230804_180000_005.nc"
+    xout.unlink(missing_ok=True)
+    args = ["--keep-contiguous",
+            "--netcdf", _test_out_dir / "channel2_%Y%m%d_%H%M%S.nc",
+            "--channel", "2", datfile]
+    args = [str(arg) for arg in args]
+    logger.debug("dumping: %s", " ".join(args))
+    try:
+        with contextlib.chdir(_this_dir):
+            main(['dump_hotfilm.py'] + args)
+    except FileNotFoundError as fe:
+        if fe.filename == "data_dump":
+            pytest.xfail("data_dump not found.")
+        raise
+    xbase = _this_dir / "baseline" / "channel2_20230804_180000_005.nc"
+    compare_netcdf(xout, xbase)
+
+
+def test_netcdf_output_not_contiguous():
+    "Just like test_netcdf_output(), but without --keep-contiguous."
+    datfile = _test_data_dir / "channel2_20230804_180000_05.dat"
+    (_this_dir / _test_out_dir).mkdir(exist_ok=True)
+    xout = _this_dir / _test_out_dir / "channel2_skips_20230804_180000_005.nc"
+    xout.unlink(missing_ok=True)
+    args = ["--netcdf",
+            _test_out_dir / "channel2_skips_%Y%m%d_%H%M%S.nc",
+            "--channel", "2", datfile]
+    args = [str(arg) for arg in args]
+    logger.debug("dumping: %s", " ".join(args))
+    try:
+        with contextlib.chdir(_this_dir):
+            main(['dump_hotfilm.py'] + args)
+    except FileNotFoundError as fe:
+        if fe.filename == "data_dump":
+            pytest.xfail("data_dump not found.")
+        raise
+    xbase = _this_dir / "baseline" / "channel2_skips_20230804_180000_005.nc"
+    compare_netcdf(xout, xbase)
 
 
 def create_lines(when: dt.datetime, nchannels: int, nscans: int,

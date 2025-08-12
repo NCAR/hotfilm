@@ -54,6 +54,9 @@ itself were aligned manually by sight, so it is possible there is some
 calibration error if the hot film alignment allows unexpected influence
 from the $v$ component.
 
+The implementation of the calibration process is in
+[hotfilm_calibration.py](../hotfilm/hotfilm_calibration.py).
+
 ## Quality of Fit
 
 The calibration computes a few quality of fit metrics.  These plots give an
@@ -94,10 +97,59 @@ equation, such as due to temperature or low wind speed.  In the example
 plot above, the simulated noise with magnitude 1 $m/s$ yields a RMS value
 of 1.05 $m/s$.
 
-## Implementation
+## Calibration test data
 
-The implementation of the calibration is in
-[hotfilm_calibration.py](../hotfilm/hotfilm_calibration.py).
+There are excerpts of ISFS sonic data and hot film data stored in this
+repository, generated as follows:
+
+```sh
+cd tests/test_data
+ncks -d time,1800,2099 -v u_0_5m_t0,v_0_5m_t0,w_0_5m_t0,u_1m_t0,v_1m_t0,w_1m_t0,u_2m_t0,v_2m_t0,w_2m_t0,u_4m_t0,v_4m_t0,w_4m_t0 .../hr_qc_instrument/isfs_m2hats_qc_hr_inst_20230804_180000.nc isfs_m2hats_qc_hr_inst_uvw_20230804_183000.nc
+ncks -d time,0,700000 .../hotfilm_20230804_182917_120.nc hotfilm_20230804_182917_6.nc
+```
+
+## Generating and plotting calibrations
+
+The `calibrate_hotfilm.py` script can be used to fit and plot calibrations for
+the hot film voltages given ISFS sonic data for the same time period.  The
+example below uses the test data mentioned above to generate one calibration
+over a 5-minute period for each height:
+
+```sh
+./calibrate_hotfilm.py tests/test_data/hotfilm_20230804_182917_6.nc tests/test_data/isfs_m2hats_qc_hr_inst_uvw_20230804_183000.nc --plot
+```
+
+This command writes the calibrated hot film wind speeds to netcdf:
+
+```sh
+./calibrate_hotfilm.py tests/test_data/hotfilm_20230804_182917_6.nc tests/test_data/isfs_m2hats_qc_hr_inst_uvw_20230804_183000.nc --netcdf hotfilm_wind_speed_%Y%m%d_%H%M%S.nc
+```
+
+The netcdf output contains a wind speed variable for each hotfilm channel,
+with a name of the form `spdhf_{height}_{site}`.  There are two time
+dimensions.  The hotfilm wind speeds use a dimension named `time` with a time
+coordinate variable `time`, in units of microseconds since some reference
+time.  The interval between `time` coordinates corresponds to the frequency of
+the hotfilm voltage sampling.
+
+There is a second time dimension and coordinate variable named
+`calibration_time`.  Those time coordinates are intervals corresponding to the
+calibration period, usually 5 minutes.  Calibration parameters are attached to
+the `calibration_time` coordinate variable.  An example is shown below:
+
+```
+int calibration_time(calibration_time) ;
+        calibration_time:long_name = "Calibration period begin time" ;
+        calibration_time:period_seconds = 300 ;
+        calibration_time:mean_interval_seconds = 1 ;
+        calibration_time:units = "microseconds since 2023-08-04 18:30:00+00:00" ;
+```
+
+The calibration coefficients are in variables named `a_{channel}` and
+`b_{channel}`, one value for each variable at each `calibration_time`.  Each
+`spdhf` variable has an attribute `hotfilm_channel` to map from that variable
+to the `a` and `b` coefficients which were used to calculate that wind speed
+during the corresponding calibration period.
 
 Currently only $R_{{spd}}^2$ and RMS are written to the hotfilm wind speed
 NetCDF files.
