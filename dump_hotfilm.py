@@ -14,6 +14,7 @@ from hotfilm.outout_path import OutputPath
 from hotfilm.utils import convert_time_coordinate
 from hotfilm.utils import td_to_microseconds
 from hotfilm.utils import add_history_to_dataset
+from hotfilm.utils import rdatetime
 
 from typing import Generator, Union
 from typing import Optional, List
@@ -118,6 +119,9 @@ class ReadHotfilm:
     begin: Optional[np.datetime64]
     end: Optional[np.datetime64]
     keep_contiguous: bool
+    minblock: np.timedelta64
+    maxblock: np.timedelta64
+    file_interval: np.timedelta64
 
     # really these should come from the xml, but hardcode for now
     HEIGHTS = {
@@ -144,10 +148,12 @@ class ReadHotfilm:
         self.begin = None
         self.end = None
         self.timeformat = time_formatter.FLOAT_SECONDS
-        # minimum number of seconds required to consider a block good
-        self.minblock = 1*60
-        # maximum number of seconds to include in a block
-        self.maxblock = 120*60
+        # minimum duration required to consider a block good
+        self.minblock = np.timedelta64(0, 'm')
+        # maximum duration to include in a block
+        self.maxblock = np.timedelta64(0, 'm')
+        # interval at which to start new files
+        self.file_interval = np.timedelta64(60, 'm')
         # adjustment to successive sample times to line them up with previous
         # samples as the labjack clock drifts relative to the system time.
         self.adjust_time = 0
@@ -177,8 +183,8 @@ class ReadHotfilm:
             self.timeformat = fspec
 
     def set_min_max_block_minutes(self, mmin: int, mmax: int):
-        self.minblock = mmin*60
-        self.maxblock = mmax*60
+        self.minblock = np.timedelta64(mmin, 'm')
+        self.maxblock = np.timedelta64(mmax, 'm')
 
     def format_time(self, when: np.datetime64):
         "Convenient shortcut, but not optimal."
@@ -389,8 +395,6 @@ adj scan strt: %s
         self.adjust_time = 0
         # accumulate scans in a list until the minimum period is reached.
         minreached = False
-        minblock = np.timedelta64(self.minblock, 's')
-        maxblock = np.timedelta64(self.maxblock, 's')
         scan_list = []
         last_scan = None
         period_start = None
@@ -452,11 +456,11 @@ adj scan strt: %s
                     logger.info("starting scan block: %s", ft(scan.time[0]))
                 period = self.get_period_end(scan) - period_start
                 period = np.timedelta64(period, 's')
-                if period <= maxblock:
+                if not self.maxblock or period <= self.maxblock:
                     scan_list.append(scan)
                 else:
                     logger.info("maximum block period %s exceeded at %s",
-                                maxblock, ft(scan.time[0]))
+                                self.maxblock, ft(scan.time[0]))
                     take_scan = None
                     self.next_scan = scan
 
@@ -464,11 +468,11 @@ adj scan strt: %s
 
             # see if the pending scans have reached minimum period yet
             if scan_list and not minreached:
-                minreached = (period >= minblock)
+                minreached = (period >= self.minblock)
                 if minreached and last_scan:
                     logger.info("minimum block period %s reached at %s "
                                 "with scan period %s",
-                                minblock, ft(last_scan.time[-1]), period)
+                                self.minblock, ft(last_scan.time[-1]), period)
 
             if scan_list and minreached:
                 # flush the scan list
@@ -601,39 +605,75 @@ adj scan strt: %s
         add_history_to_dataset(ds, "dump_hotfilm", self.command_line)
         return ds
 
+    def get_window(self, ds: xr.Dataset):
+        """
+        Return the file interval window containing the start of Dataset @p ds.
+        """
+        if ds is None or ds.time.size == 0:
+            return None, None
+        begin = rdatetime(ds.time[0].data, self.file_interval)
+        end = begin + self.file_interval
+        logger.info("file window for %s set to [%s, %s]",
+                    self.file_interval, ft(begin), ft(end))
+        return begin, end
+
     def write_netcdf_file(self, filespec: str):
         """
         Like write_text_file(), but write to a netcdf file.  Create a time
         coordinate variable using microseconds since the first time, and
         create variables for each channel.
         """
+        outpath = OutputPath()
+        tfile = None
+        ds = None
+        # the current file interval being filled
+        begin: np.datetime64 = None
+        end: np.datetime64 = None
+
         while True:
-            outpath = OutputPath()
-            tfile = None
-            datasets = []
-            # create a Dataset for each block, then concatenate and write them
-            # to a netcdf file.
+            # concatenate blocks in a Dataset and write to netcdf files.
             for data in self.read_scans():
-                if tfile is None:
-                    tfile = outpath.start(filespec, data)
-                datasets.append(data)
+                ds = data if ds is None else xr.concat([ds, data], dim='time')
+                if not self.file_interval:
+                    continue
+                if begin is None:
+                    begin, end = self.get_window(ds)
+                if ds.time[-1].data >= end:
+                    logger.debug("file window passed at %s",
+                                 ft(ds.time[-1].data))
+                    break
 
-            if tfile:
-                ds = xr.concat(datasets, dim='time')
-                # get length in minutes before time coordinate is converted
-                period = self.get_period_end(ds) - ds.time[0].data
-                ds = self._add_netcdf_attrs(ds)
-                # make sure data variables have type float32
-                encodings = {
-                    var.name: {'dtype': 'float32'}
-                    for var in ds.data_vars.values()
-                }
-                ds.to_netcdf(tfile.name, engine='netcdf4', format='NETCDF4',
-                             encoding=encodings)
-                outpath.finish(period)
-
-            if tfile is None:
+            # done when no data left
+            if ds is None or ds.time.size == 0:
                 break
+
+            # if file intervals not active, then write the entire dataset,
+            # otherwise write the data within the current interval
+            tfile = outpath.start(filespec, ds)
+            # get length in minutes before time coordinate is converted,
+            # except the length is not useful on fixed file intervals.
+            period = None
+            if begin is None:
+                period = self.get_period_end(ds) - ds.time[0].data
+                ncds = ds
+                ds = None
+            else:
+                # set window so end time is not included
+                window = slice(begin, end - np.timedelta64(1, 'ns'))
+                ncds = ds.sel(time=window)
+                ds = ds.sel(time=slice(end, None))
+            ncds = self._add_netcdf_attrs(ncds)
+            # make sure data variables have type float32
+            encodings = {
+                var.name: {'dtype': 'float32'}
+                for var in ncds.data_vars.values()
+            }
+            ncds.to_netcdf(tfile.name, engine='netcdf4', format='NETCDF4',
+                           encoding=encodings)
+            # for file intervals, rename to the interval start
+            outpath.finish(period, begin)
+            # advance file window or reset it according to remaining data
+            begin, end = self.get_window(ds)
 
 
 def apply_args(hf: ReadHotfilm, argv: Optional[List[str]]):
@@ -659,15 +699,21 @@ def apply_args(hf: ReadHotfilm, argv: Optional[List[str]]):
                         help="Adjust sample times in contiguous blocks to "
                         "keep them exactly at the nominal sample rate, "
                         "even when the labjack clock drifts relative to GPS.")
-    parser.add_argument("--min", type=int, default=hf.minblock//60,
+    minminutes = np.timedelta64(hf.minblock, 'm').astype(int)
+    parser.add_argument("--min", type=int, default=minminutes,
                         help="Minimum minutes to write into a file.")
-    parser.add_argument("--max", type=int, default=hf.maxblock//60,
-                        help="Maximum minutes to write into a file.")
+    maxminutes = np.timedelta64(hf.maxblock, 'm').astype(int)
+    parser.add_argument("--max", type=int, default=maxminutes,
+                        help="Maximum minutes to write into a file.  "
+                        "If zero, the only limit is set by --interval.")
+    interval_minutes = np.timedelta64(hf.file_interval, 'm').astype(int)
+    parser.add_argument("--interval", type=int, default=interval_minutes,
+                        metavar="MIN",
+                        help="Start netcdf files at intervals of MIN minutes.")
     parser.add_argument("--netcdf", help="Write data to named netcdf file")
     parser.add_argument("--text", help="Write data in text columns to file.  "
                         "Filenames can include time specifiers, "
-                        "like %%Y%%m%%d_%%H%%M%%S.",
-                        default="hotfilm_%Y%m%d_%H%M%S.txt")
+                        "like %%Y%%m%%d_%%H%%M%%S.")
     parser.add_argument("--timeformat",
                         help="Timestamp format, iso or %% spec pattern.  "
                         "Use %%s.%%f for "
@@ -677,11 +723,15 @@ def apply_args(hf: ReadHotfilm, argv: Optional[List[str]]):
                         default='info')
     args = parser.parse_args(argv)
 
+    if not args.text and not args.netcdf:
+        parser.error("Specify output with either --text or --netcdf.")
+
     logging.basicConfig(level=logging.getLevelName(args.log.upper()))
     hf.set_source(args.input)
     if args.channels:
         hf.select_channels(args.channels)
     hf.set_min_max_block_minutes(args.min, args.max)
+    hf.file_interval = np.timedelta64(args.interval, 'm')
     if args.begin:
         hf.begin = iso_to_datetime64(args.begin)
     if args.end:

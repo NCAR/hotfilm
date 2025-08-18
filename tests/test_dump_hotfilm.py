@@ -199,6 +199,7 @@ def test_get_block():
 
 def test_short_blocks():
     hf = ReadHotfilm()
+    hf.set_min_max_block_minutes(1, 120)
     hf.select_channels([1])
     hf.line_iterator = iter(_block_lines)
     logger.debug("first get_block() call...")
@@ -293,7 +294,8 @@ def remove_attributes(ds: xr.Dataset, attrs: list[str]) -> None:
             del ds.attrs[att]
 
 
-def compare_netcdf(xout: Path, xbase: Path):
+def compare_netcdf(xout: Path, xbase: Path,
+                   begin: np.datetime64 = None, end: np.datetime64 = None):
     """
     Compare two netcdf files and fail the test if and differences found.
     The expected baseline output is at @p xbase, and the test output is at
@@ -304,6 +306,9 @@ def compare_netcdf(xout: Path, xbase: Path):
     assert xout.stat().st_mode & 0o444 == 0o444
     tds = xr.open_dataset(xout)
     xds = xr.open_dataset(xbase)
+    if begin and end:
+        tds = tds.sel(time=slice(begin, end))
+        xds = xds.sel(time=slice(begin, end))
     ignores = ["history", "command_line", "version"]
     remove_attributes(tds, ignores)
     remove_attributes(xds, ignores)
@@ -341,7 +346,7 @@ def test_netcdf_output():
     (_this_dir / _test_out_dir).mkdir(exist_ok=True)
     xout = _this_dir / _test_out_dir / "channel2_20230804_180000_005.nc"
     xout.unlink(missing_ok=True)
-    args = ["--keep-contiguous",
+    args = ["--keep-contiguous", "--interval", "0",
             "--netcdf", _test_out_dir / "channel2_%Y%m%d_%H%M%S.nc",
             "--channel", "2", datfile]
     args = [str(arg) for arg in args]
@@ -363,7 +368,7 @@ def test_netcdf_output_not_contiguous():
     (_this_dir / _test_out_dir).mkdir(exist_ok=True)
     xout = _this_dir / _test_out_dir / "channel2_skips_20230804_180000_005.nc"
     xout.unlink(missing_ok=True)
-    args = ["--netcdf",
+    args = ["--interval", "0", "--netcdf",
             _test_out_dir / "channel2_skips_%Y%m%d_%H%M%S.nc",
             "--channel", "2", datfile]
     args = [str(arg) for arg in args]
@@ -377,6 +382,35 @@ def test_netcdf_output_not_contiguous():
         raise
     xbase = _this_dir / "baseline" / "channel2_skips_20230804_180000_005.nc"
     compare_netcdf(xout, xbase)
+
+
+def test_netcdf_output_file_intervals():
+    "Expect 5 1-minute netcdf files."
+    datfile = _test_data_dir / "channel2_20230804_180000_05.dat"
+    (_this_dir / _test_out_dir).mkdir(exist_ok=True)
+    xout = []
+    for min in [0, 1, 2, 3, 4]:
+        xout.append(_this_dir / _test_out_dir / f"channel2_20230804_18{min:02d}00.nc")
+        xout[-1].unlink(missing_ok=True)
+    args = ["--interval", "1",
+            "--netcdf", _test_out_dir / "channel2_%Y%m%d_%H%M%S.nc",
+            "--channel", "2", datfile]
+    args = [str(arg) for arg in args]
+    logger.debug("dumping: %s", " ".join(args))
+    try:
+        with contextlib.chdir(_this_dir):
+            main(['dump_hotfilm.py'] + args)
+    except FileNotFoundError as fe:
+        if fe.filename == "data_dump":
+            pytest.xfail("data_dump not found.")
+        raise
+    xbase = _this_dir / "baseline" / "channel2_skips_20230804_180000_005.nc"
+    # pick one minute from the baseline and compare to the dataset in the
+    # 1-minute file.  they should be the same.
+    for min in [0, 1, 2, 3, 4]:
+        begin = np.datetime64("2023-08-04T18:00:00") + np.timedelta64(min, 'm')
+        end = begin + np.timedelta64(1, 'm') - np.timedelta64(1, 'ns')
+        compare_netcdf(xout[min], xbase, begin, end)
 
 
 def create_lines(when: dt.datetime, nchannels: int, nscans: int,
