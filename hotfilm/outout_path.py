@@ -56,8 +56,7 @@ class OutputPath:
         else:
             fpath = path.stem + ("_%03d" % (minutes)) + path.suffix
         fpath = Path(self.tfile.name).parent / fpath
-        logger.debug("file finished with mins=%s, renaming: %s",
-                     minutes, fpath)
+        logger.info("file finished, renaming: %s", fpath)
         fpath = Path(self.tfile.name).replace(fpath)
         # the files should not need to be writable
         fpath.chmod(0o444)

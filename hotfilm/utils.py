@@ -1,4 +1,6 @@
+"Utility functions for hotfilm data processing."
 
+import datetime as dt
 import subprocess as sp
 from pathlib import Path
 import logging
@@ -40,6 +42,14 @@ def td_to_microseconds(td64: np.timedelta64) -> int:
 def td_to_seconds(td64: np.timedelta64) -> int:
     td = pd.to_timedelta(td64)
     return (td.days * _seconds_per_day) + td.seconds
+
+
+def iso_to_datetime64(iso: str) -> np.datetime64:
+    """
+    Convert an ISO formatted string to a datetime64.  The timezone is assumed
+    to be UTC, since numpy.datetime64 does not support timezone offsets.
+    """
+    return np.datetime64(dt.datetime.fromisoformat(iso))
 
 
 def convert_time_coordinate(ds: xr.Dataset, dt: xr.DataArray,
