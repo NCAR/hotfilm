@@ -12,8 +12,8 @@ import numpy as np
 import xarray as xr
 import pytest
 
-from dump_hotfilm import ReadHotfilm
-from dump_hotfilm import time_formatter
+from hotfilm.read_hotfilm import ReadHotfilm
+from hotfilm.time_formatter import time_formatter
 from hotfilm.utils import td_to_microseconds
 from dump_hotfilm import main
 
@@ -385,11 +385,11 @@ def test_netcdf_output_not_contiguous():
 
 
 def test_netcdf_output_file_intervals():
-    "Expect 5 1-minute netcdf files."
+    "Expect 5 and only 5 1-minute netcdf files."
     datfile = _test_data_dir / "channel2_20230804_180000_05.dat"
     (_this_dir / _test_out_dir).mkdir(exist_ok=True)
     xout = []
-    for min in [0, 1, 2, 3, 4]:
+    for min in [0, 1, 2, 3, 4, 5]:
         xout.append(_this_dir / _test_out_dir / f"channel2_20230804_18{min:02d}00.nc")
         xout[-1].unlink(missing_ok=True)
     args = ["--interval", "1",
@@ -404,6 +404,8 @@ def test_netcdf_output_file_intervals():
         if fe.filename == "data_dump":
             pytest.xfail("data_dump not found.")
         raise
+    # make sure 1805 file was not created
+    assert xout[-1].exists() is False
     xbase = _this_dir / "baseline" / "channel2_skips_20230804_180000_005.nc"
     # pick one minute from the baseline and compare to the dataset in the
     # 1-minute file.  they should be the same.

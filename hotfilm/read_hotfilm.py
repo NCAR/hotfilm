@@ -579,36 +579,58 @@ adj scan strt: %s
 
         while True:
             # concatenate blocks in a Dataset and write to netcdf files.
+            scans = [ds] if ds is not None else []
+            ds = None
             for data in self.read_scans():
-                ds = data if ds is None else xr.concat([ds, data], dim='time')
+                scans.append(data)
                 if not self.file_interval:
                     continue
                 if begin is None:
-                    begin, end = self.get_window(ds)
-                if ds.time[-1].data >= end:
+                    begin, end = self.get_window(data)
+                if data.time[-1].data >= end:
                     logger.debug("file window passed at %s",
-                                 _ft(ds.time[-1].data))
+                                 _ft(data.time[-1].data))
                     break
 
             # done when no data left
-            if ds is None or ds.time.size == 0:
+            if not scans or scans[0].time.size == 0:
+                logger.info("finished, no more scans read.")
+                break
+
+            logger.debug(f"concatenating {len(scans)} scans into dataset...")
+            ds = xr.concat(scans, dim='time')
+
+            # assume less than a second of data left is leftover from a scan
+            # in the previous time window and should not be written. this
+            # allows processing by intervals to work in parallel without
+            # overwriting a file that will be written by a different process.
+            period = self.get_period_end(ds) - ds.time[0].data
+            if period < np.timedelta64(1, 's'):
+                logger.info("finished, less than a second of data left.")
                 break
 
             # if file intervals not active, then write the entire dataset,
             # otherwise write the data within the current interval
             tfile = outpath.start(filespec, ds)
             # get length in minutes before time coordinate is converted,
-            # except the length is not useful on fixed file intervals.
-            period = None
             if begin is None:
-                period = self.get_period_end(ds) - ds.time[0].data
                 ncds = ds
                 ds = None
             else:
+                # length is not useful on fixed file intervals.
+                period = None
+                # need to know at which index the time coordinate exceeds
+                # the window end time
+                idx = ds.time.searchsorted(end)
                 # set window so end time is not included
-                window = slice(begin, end - np.timedelta64(1, 'ns'))
-                ncds = ds.sel(time=window)
-                ds = ds.sel(time=slice(end, None))
+                # window = slice(begin, end - np.timedelta64(1, 'ns'))
+                window = slice(0, idx)
+                logger.debug("selecting time window '%s' from coords:\n%s"
+                             "dataset:\n%s",
+                             window, ds.coords['time'], ds)
+                ncds = ds.isel(time=window)
+                ds = ds.isel(time=slice(idx, None))
+                logger.debug("dataset after window removed:\n%s", ds)
             ncds = self._add_netcdf_attrs(ncds)
             # make sure data variables have type float32
             encodings = {
