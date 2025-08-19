@@ -2,6 +2,11 @@
 
 ## [unreleased] - Pending changes
 
+Added the `--interval` argument to `dump_hotfilm.py` to write the netcdf files
+at fixed intervals, by default one hour.  The `--min` and `--max` arguments
+now default to 0, so unless they are specified, all data are written and file
+start times are determined only by `--interval`.
+
 The `dump_hotfilm.py` script now writes out the hotfilm voltage timestamps
 exactly as they were recorded in the raw NIDAS data files, instead of
 adjusting the timestamps so contiguous samples had a regularly spaced time
