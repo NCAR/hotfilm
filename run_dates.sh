@@ -29,6 +29,25 @@ do_stage=0
 do_calibrate=0
 dates=""
 
+
+usage() {
+    cat <<EOF
+Usage: $0 [--dump] [--calibrate] [--stage] [--dates] [--index] [date ...]
+
+  --dump       Convert raw hotfilm data to netCDF
+  --calibrate  Calibrate hotfilm netcdf against sonics and write wind speed
+  --stage      Stage sonic data locally
+  --dates      Print default dates and exit
+  --index      Index output directories for web access and exit
+  date ...     List of dates to process (YYYYMMDD),
+               otherwise process default dates.
+
+Default operations are --dump and --calibrate, --calibrate implies --stage.
+EOF
+}
+
+
+
 # Default dates
 get_dates() {
 cat <<EOF
@@ -139,6 +158,15 @@ while [[ $# -gt 0 ]] ; do
         --index)
             index_dirs
             exit 0
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        -*)
+            echo "Unknown argument: $1"
+            usage
+            exit 1
             ;;
         *)
             if [[ -z "$dates" ]] ; then
