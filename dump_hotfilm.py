@@ -92,9 +92,16 @@ def main(argv: List[str]):
         hf.write_text_file(args.text)
     else:
         hf.write_text(sys.stdout)
-    if hf.unmatched_lines > 0:
-        logger.warning("%d unmatched lines in data_dump output.",
-                       hf.unmatched_lines)
+
+    logger.log(logging.WARNING if hf.nwarnings else logging.DEBUG,
+               f"{hf.nwarnings} warnings.")
+    if hf.nwarnings > 0:
+        sys.stderr.write(f"{hf.nwarnings} warnings.  "
+                         "Check the logs for details.\n")
+    logger.log(logging.INFO if hf.ncorrected else logging.DEBUG,
+               f"{hf.ncorrected} corrected samples.")
+    if hf.ncorrected > 0:
+        sys.stdout.write(f"{hf.ncorrected} corrected samples.\n")
 
 
 if __name__ == "__main__":
