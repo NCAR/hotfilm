@@ -43,3 +43,13 @@ The netcdf input test data is reduced by selecting specific variables with
 ```sh
 ncks -v u_2m_t0,time isfs_m2hats_qc_geo_tiltcor_hr_20230804_160000.nc u_2m_t0_20230804_160000.nc
 ```
+
+## Generating test data without sorting
+
+`nidsmerge` cannot be used to extract test data which is not in time order,
+since it sorts samples before writing them.  Instead, `sensor_extract` as of
+v1.2.6 can be used:
+
+```
+sensor_extract --samples 200,501 --samples 200,512 --samples 200,522 --start "2023-09-20_00:59:50" --end "2023-09-20_01:00:10" --log info hotfilm_20230920_000000.dat hotfilm_20230920_010000.dat -o channel2_20230920_005950.dat
+```
