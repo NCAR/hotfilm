@@ -16,7 +16,9 @@ import pandas as pd
 import xarray as xr
 
 from hotfilm.outout_path import OutputPath
+from hotfilm.utils import combine_datasets
 from hotfilm.utils import convert_time_coordinate
+from hotfilm.utils import split_dataset
 from hotfilm.utils import add_history_to_dataset
 from hotfilm.utils import rdatetime
 from hotfilm.time_formatter import time_formatter
@@ -77,13 +79,22 @@ class ReadHotfilm:
         'ch3': '4m'
     }
     SITE = 't0'
+    ALL_CHANNELS = ['ch0', 'ch1', 'ch2', 'ch3']
+    CHANNEL_IDS = {
+        'ch0': 520,
+        'ch1': 521,
+        'ch2': 522,
+        'ch3': 523
+    }
+    ADC_STATUS_ID = 501
+    SCAN_DIM = 'time_scan_start'
 
     def __init__(self):
         self.source = ["sock:192.168.1.220:31000"]
         self.cmd = []
         self.dd = None
         # default to all channels, otherwise a list of channel names
-        self.channels = None
+        self.channels = self.ALL_CHANNELS
         # insert a delay between samples read from a file
         self.delay = 0
         # Dataset for the current scan as it accumulates channels
@@ -113,6 +124,7 @@ class ReadHotfilm:
         # exactly at the nominal sample rate, even when the labjack clock
         # drifts relative to GPS.
         self.keep_contiguous = False
+        self.unmatched_lines = 0
 
     def set_command_line(self, argv: List[str]):
         self.command_line = " ".join([f"'{arg}'" if ' ' in arg else arg
@@ -142,7 +154,11 @@ class ReadHotfilm:
 
     def _make_cmd(self):
         self.cmd = ["data_dump", "--precision", str(self.precision),
-                    "--nodeltat", "-i", "-1,520-523"]
+                    "--nodeltat"]
+        self.cmd += ["-i", f"/,{self.ADC_STATUS_ID}"]
+        # add samples for each channel
+        for ch in self.channels:
+            self.cmd += ["-i", f"/,{self.CHANNEL_IDS[ch]}"]
         self.cmd += self.source
 
     def start(self):
@@ -150,15 +166,19 @@ class ReadHotfilm:
         command = " ".join(self.cmd)
         logger.info("running: %s%s", command[:60],
                     "..." if command[60:] else "")
+        logger.debug("full command: %s", command)
         self.dd = sp.Popen(self.cmd, stdout=sp.PIPE, text=True)
         self.line_iterator = self.dd.stdout
 
     def select_channels(self, channels: Union[list[int], None]):
-        self.channels = [f"ch{ch}" for ch in channels] if channels else None
+        self.channels = [f"ch{ch}" for ch in channels or []
+                         if f"ch{ch}" in self.ALL_CHANNELS]
+        if not self.channels:
+            self.channels = self.ALL_CHANNELS
         logger.debug("selected channels: %s",
                      ",".join(self.channels) if self.channels else "all")
 
-    def get_data(self) -> Union[xr.DataArray, None]:
+    def get_data(self, scan: xr.Dataset = None) -> Union[xr.DataArray, None]:
         """
         Return the next selected channel as a DataArray.
         """
@@ -168,18 +188,7 @@ class ReadHotfilm:
         while data is None:
             if not (line := next(self.line_iterator, None)):
                 break
-            data = self.parse_line(line)
-            if data is None:
-                continue
-            # If not yet into the selected range, skip it.
-            when = data.time[0]
-            if self.begin and when < self.begin:
-                data = None
-            elif self.end and when > self.end:
-                data = None
-                break
-            elif (self.channels and data.name not in self.channels):
-                data = None
+            data = self.parse_line(line, scan)
 
         if data is not None and self.delay:
             time.sleep(self.delay)
@@ -201,33 +210,22 @@ class ReadHotfilm:
         all channels with the same timestamp and the same sample rate.
         """
         # The full scan to be returned.
-        scan = None
-        while scan is None:
-            data = self.get_data()
+        scan = self.scan
+        while True:
+            data = self.get_data(scan)
             if data is None:
-                # return whatever scan might be pending
-                scan = self.scan
+                # return current scan, no pending scan
                 self.scan = None
                 break
-            when = data.time[0]
-            if self.scan is None or self.scan.time[0] != when:
-                logger.debug("scan %s at %s", data.name, _ft(when))
-                # the current scan, if any, is what will be returned
-                scan = self.scan
-                self.scan = xr.Dataset({data.name: data})
-            elif len(self.scan.time) != len(data.time):
-                # sample rate changed, so return the current scan
-                logger.debug("scan %s at %s: "
-                             "sample rate changed from %d to %d Hz",
-                             data.name, _ft(when),
-                             len(self.scan.time), len(data.time))
-                scan = self.scan
-                self.scan = xr.Dataset({data.name: data})
-            else:
-                # join this channel with existing scan
-                name = data.name
-                logger.debug("add %s to scan at %s", name, _ft(when))
-                self.scan[name] = data
+            if scan is None:
+                scan = data
+            if data is not scan:
+                # started a new scan. the current scan, if any, is what will
+                # be returned.  when this method is called again, the pending
+                # scan will be filled with the succeeding samples.
+                self.scan = data
+                break
+
         return scan
 
     def is_contiguous(self, ds: xr.Dataset, scan: xr.Dataset) -> bool:
@@ -361,8 +359,8 @@ adj scan strt: %s
             if scan and period_start is None:
                 period_start = scan.time[0].data
             if scan:
-                logger.debug("handling next scan: %d channels of "
-                             "%d samples at %s",
+                logger.debug("handling next scan: %d variables, "
+                             "%d channel samples, at %s",
                              len(scan.data_vars), len(scan.time),
                              _ft(scan.time[0]))
             if scan and not self.sample_rate:
@@ -422,7 +420,6 @@ adj scan strt: %s
 
             if scan_list and minreached:
                 # flush the scan list
-                logger.debug("yielding %d scans...", len(scan_list))
                 for onescan in scan_list:
                     yield onescan
                 scan_list.clear()
@@ -454,25 +451,79 @@ adj scan strt: %s
         Read a block of scans and return them as a single Dataset.
         """
         if scans := list(self.read_scans()):
-            return xr.merge(scans)
+            return combine_datasets(scans, ['time', self.SCAN_DIM])
         return None
 
-    def parse_line(self, line) -> Union[xr.DataArray, None]:
+    def parse_line(self, line, scan: xr.Dataset) -> Union[xr.DataArray, None]:
+        """
+        Parse a line of data_dump output, and either add the data to the given
+        scan if it belongs to that scan, or start a new scan and return it.
+        Return None if the line could not be parsed or if the sample time is
+        out of range, meaning the next line should be read.
+        """
+        scan_in = scan
         match = _prefix_rx.match(line) if line else None
         if not match:
+            # there is no reason any lines except the header should be
+            # unmatched, so warn if any are found.
+            if "date time" not in line:
+                logger.warning("unmatched line: %s", line.strip())
+                self.unmatched_lines += 1
             return None
+
         when = _datetime_from_match(match)
-        y = np.fromstring(match.group('data'), dtype=float, sep=' ')
+
+        # abort as soon as we know if this sample time is out of range
+        if bool(self.begin and when < self.begin or
+                self.end and when > self.end):
+            return None
+
+        if bool(scan is None or
+                'time' in scan.dims and when != scan.time[0] or
+                self.SCAN_DIM in scan.dims and when != scan[self.SCAN_DIM][0]):
+            # start a new scan
+            scan = xr.Dataset()
+
+        spsid = int(match.group('spsid'))
+        if spsid == self.ADC_STATUS_ID:
+            y = np.fromstring(match.group('data'), dtype=np.int32, sep=' ')
+            pps_count = xr.DataArray(y[0:1], name='pps_count',
+                                     coords={self.SCAN_DIM: [when]})
+            pps_count.encoding['dtype'] = 'int32'
+            scan['pps_count'] = pps_count
+            pps_step = xr.DataArray(y[1:2], name='pps_step',
+                                    coords={self.SCAN_DIM: [when]})
+            pps_step.encoding['dtype'] = 'int32'
+            scan['pps_step'] = pps_step
+            return scan
+
+        # otherwise this is a channel data sample
+        y = np.fromstring(match.group('data'), dtype=np.float32, sep=' ')
+        channel = spsid - self.CHANNEL_IDS['ch0']
+        name = f"ch{channel}"
+        if name not in self.channels:
+            logger.warning("unexpected data for unselected channel: %s", name)
+            return None
         step = np.timedelta64(int(1e6/len(y)), 'us')
         x = [when + (i * step) for i in range(0, len(y))]
         if False and line:
             logger.debug("from line: %s...; x[0]=%s, x[%d]=%s", line[:30],
                          x[0].isoformat(), len(x)-1, x[-1].isoformat())
-        channel = int(match.group('spsid')) - 520
-        name = f"ch{channel}"
         data = xr.DataArray(y, name=name, coords={'time': x})
         data.encoding['dtype'] = 'float32'
-        return data
+
+        logger.debug("add %s to %sscan at %s", name,
+                     "" if scan else "new ", _ft(when))
+        scan[data.name] = data
+
+        # note if the scan rate changed
+        if scan_in and len(scan_in.time) != len(data.time):
+            logger.debug("scan %s at %s: "
+                         "sample rate changed from %d to %d Hz",
+                         data.name, _ft(when),
+                         len(scan_in.time), len(data.time))
+
+        return scan
 
     def write_text(self, out):
         data = self.get_scan()
@@ -539,7 +590,10 @@ adj scan strt: %s
         Setup time coordinate and data variable attributes for netcdf output.
         """
         ds = convert_time_coordinate(ds, ds.time)
-        for c in ds.data_vars.keys():
+        if self.SCAN_DIM in ds.dims:
+            ds = convert_time_coordinate(ds, ds[self.SCAN_DIM])
+        channels = [v for v in ds.data_vars if v.startswith('ch')]
+        for c in channels:
             # use conventional netcdf and ISFS attributes
             ds[c].attrs['units'] = 'V'
             ds[c].attrs['long_name'] = f'{c} bridge voltage'
@@ -548,6 +602,15 @@ adj scan strt: %s
             ds[c].attrs['site'] = self.SITE
             ds[c].attrs['height'] = height
             ds[c].attrs['sample_rate_hz'] = np.int32(self.sample_rate)
+
+        if 'pps_count' in ds.data_vars:
+            var = ds['pps_count']
+            var.attrs['long_name'] = 'PPS counter'
+            var.attrs['units'] = '1'
+        if 'pps_step' in ds.data_vars:
+            var = ds['pps_step']
+            var.attrs['units'] = '1'
+            var.attrs['long_name'] = 'Index of PPS count change'
 
         add_history_to_dataset(ds, "dump_hotfilm", self.command_line)
         return ds
@@ -559,6 +622,8 @@ adj scan strt: %s
         if ds is None or ds.time.size == 0:
             return None, None
         begin = rdatetime(ds.time[0].data, self.file_interval)
+        if begin > ds.time[0].data:
+            begin -= self.file_interval
         end = begin + self.file_interval
         logger.info("file window for %s set to [%s, %s]",
                     self.file_interval, _ft(begin), _ft(end))
@@ -597,8 +662,8 @@ adj scan strt: %s
                 logger.info("finished, no more scans read.")
                 break
 
-            logger.debug(f"concatenating {len(scans)} scans into dataset...")
-            ds = xr.concat(scans, dim='time')
+            logger.debug(f"combining {len(scans)} scans into dataset...")
+            ds = combine_datasets(scans, ['time', self.SCAN_DIM])
 
             # assume less than a second of data left is leftover from a scan
             # in the previous time window and should not be written. this
@@ -619,22 +684,13 @@ adj scan strt: %s
             else:
                 # length is not useful on fixed file intervals.
                 period = None
-                # need to know at which index the time coordinate exceeds
-                # the window end time
-                idx = ds.time.searchsorted(end)
-                # set window so end time is not included
-                # window = slice(begin, end - np.timedelta64(1, 'ns'))
-                window = slice(0, idx)
-                logger.debug("selecting time window '%s' from coords:\n%s"
-                             "dataset:\n%s",
-                             window, ds.coords['time'], ds)
-                ncds = ds.isel(time=window)
-                ds = ds.isel(time=slice(idx, None))
-                logger.debug("dataset after window removed:\n%s", ds)
+                ncds, ds = split_dataset(ds, ['time', self.SCAN_DIM], end)
             ncds = self._add_netcdf_attrs(ncds)
-            # make sure data variables have type float32
+            # make sure data variables have type float32, but not scan
+            # variables
             encodings = {
-                var.name: {'dtype': 'float32'}
+                var.name: {'dtype': 'float32' if var.name.startswith('ch')
+                           else 'int32'}
                 for var in ncds.data_vars.values()
             }
             ncds.to_netcdf(tfile.name, engine='netcdf4', format='NETCDF4',

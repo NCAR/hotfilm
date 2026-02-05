@@ -154,3 +154,50 @@ def r_squared(actual: xr.DataArray, predicted: xr.DataArray) -> float:
         rsquared = 1 - (ss_residual / ss_total)
     logger.debug("R-squared: %f", rsquared)
     return rsquared
+
+
+def combine_datasets(scans: list[xr.Dataset], dims: list[str]) -> xr.Dataset:
+    """
+    For each of the dimensions in @p dims, concatenate the variables along
+    each dimension into separate datasets, then merge the datasets back
+    together.
+    """
+    # xr.merge() aligns the coordinates, so scans with incorrect overlapping
+    # times will override each other. this is dangerous, because it may hide
+    # time alignment problems.  xr.merge() also changes the dtypes to floats.
+    # Thus xr.concat() is used since it xr.concat() does not align
+    # coordinates, but I cannot get it to work when there are two independent
+    # time coordinates to concatenate, such as time and time_scan_start, even
+    # though the variables on each coordinate do not share any dimensions.
+    datasets = []
+    for dim in dims:
+        vars = [v.name for v in scans[0].data_vars.values() if dim in v.dims]
+        ds_dim = xr.concat([ds[vars] for ds in scans], dim=dim)
+        datasets.append(ds_dim)
+    ds = xr.merge(datasets)
+    logger.debug("merged dataset:\n%s", ds)
+    return ds
+
+
+def split_dataset(ds: xr.Dataset, dims: list[str],
+                  end: np.datetime64) -> tuple[xr.Dataset, xr.Dataset]:
+    """
+    Split the dataset into two datasets, one with time coordinates before @p
+    end, and one with time coordinates at or after @p end.  Return the two
+    datasets as a tuple, in chronological order.
+    """
+    window = {}
+    remainder = {}
+    for dim in dims:
+        # need to know at which index the time coordinate exceeds
+        # the window end time
+        idx = ds[dim].searchsorted(end)
+        window[dim] = slice(0, idx)
+        remainder[dim] = slice(idx, None)
+
+    logger.debug("selecting time window '%s' from dataset:\n%s",
+                 window, ds)
+    ncds = ds.isel(**window)
+    ds = ds.isel(**remainder)
+    logger.debug("remaining dataset after window removed:\n%s", ds)
+    return (ncds, ds)

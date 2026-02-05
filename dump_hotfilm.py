@@ -92,6 +92,9 @@ def main(argv: List[str]):
         hf.write_text_file(args.text)
     else:
         hf.write_text(sys.stdout)
+    if hf.unmatched_lines > 0:
+        logger.warning("%d unmatched lines in data_dump output.",
+                       hf.unmatched_lines)
 
 
 if __name__ == "__main__":
