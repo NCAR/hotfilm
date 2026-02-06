@@ -31,14 +31,16 @@ def _ft(dt64):
     return np.datetime_as_string(dt64, unit='us')
 
 
-# this is the data_dump timestamp prefix that needs to be matched:
+# this is the data_dump timestamp prefix that needs to be matched. times are
+# explicitly in iso format with microsecond precision, no deltat and no len
+# fields, since they are not needed.
 #
-# 2023 06 30 21:59:27.8075 200, 521    8000 1 2 3 4
+# 2023-09-20T18:15:42.843250 200, 521  1 2 3 4
 
 _prefix_rx = re.compile(
-    r"^(?P<year>\d{4}) (?P<month>\d{2}) (?P<day>\d{2}) "
+    r"^(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})T"
     r"(?P<hour>\d{2}):(?P<minute>\d{2}):(?P<second>\d{2}\.?\d*) *"
-    r"(?P<dsmid>\d+), *(?P<spsid>\d+) *(?P<len>\d+) (?P<data>.*)$")
+    r"(?P<dsmid>\d+), *(?P<spsid>\d+) (?P<data>.*)$")
 
 
 def _datetime_from_match(match) -> np.datetime64:
@@ -158,8 +160,10 @@ class ReadHotfilm:
         self.source = source
 
     def _make_cmd(self):
+        # this requires NIDAS 1.2.6
         self.cmd = ["data_dump", "--precision", str(self.precision),
-                    "--nodeltat"]
+                    "--nodeltat", "--nolen",
+                    "--timeformat", "%Y-%m-%dT%H:%M:%S.%6f"]
         self.cmd += ["-i", f"/,{self.ADC_STATUS_ID}"]
         # add samples for each channel
         for ch in self.channels:
