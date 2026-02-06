@@ -21,6 +21,8 @@ calibrated_output_spec=${calibrated_output}/hotfilm_wind_speed_%Y%m%d_%H%M%S.nc
 plot_output=./windspeed/$date/plots
 plot_output_spec=${plot_output}/hotfilm_calibrations_%Y%m%d_%H%M%S.png
 
+webroot=/net/www/docs/isf/projects/M2HATS/isfs
+
 dumphotfilm="${hotfilmdir}/dump_hotfilm.py --log info"
 calibrate="${hotfilmdir}/calibrate_hotfilm.py --log info --plot --calibrate"
 
@@ -32,17 +34,18 @@ dates=""
 
 usage() {
     cat <<EOF
-Usage: $0 [--dump] [--calibrate] [--stage] [--dates] [--index] [date ...]
+Usage: $0 [dump] [calibrate] [stage] [dates] [index] [date ...]
 
-  --dump       Convert raw hotfilm data to netCDF
-  --calibrate  Calibrate hotfilm netcdf against sonics and write wind speed
-  --stage      Stage sonic data locally
-  --dates      Print default dates and exit
-  --index      Index output directories for web access and exit
-  date ...     List of dates to process (YYYYMMDD),
-               otherwise process default dates.
+  dump        Convert raw hotfilm data to netCDF
+  calibrate   Calibrate hotfilm netcdf against sonics and write wind speed
+  stage       Stage sonic data locally
+  dates       Print default dates and exit
+  index       Index output directories for web access and exit
+  publish     Link this run output to the web filesystem
+  date ...    List of dates to process (YYYYMMDD),
+              otherwise process default dates.
 
-Default operations are --dump and --calibrate, --calibrate implies --stage.
+Default operations are dump and calibrate, calibrate implies stage.
 EOF
 }
 
@@ -137,44 +140,76 @@ index_dirs() {
 }
 
 
+publish_link() {
+    # Expect to be run from the output directory.
+    thisdir=$(realpath .)
+    rundate=$(basename $thisdir)
+    case "$rundate" in
+        hotfilm.20*)
+            (cd ${webroot} && ln -sf $thisdir .)
+            if [ $? -ne 0 ]; then
+                exit 1
+            fi
+            echo Link created:
+            ls -laF ${webroot}/$rundate
+            ;;
+        *)
+            echo "Unexpected directory name: $rundate"
+            exit 1
+            ;;
+    esac
+}
+
+
 while [[ $# -gt 0 ]] ; do
     case "$1" in
-        --dump)
+        create)
+            rundate=`date +%Y%m%d`
+            subdir=hotfilm.$rundate
+            mkdir -p $subdir
+            echo $subdir
+            exit 0
+            ;;
+        dump)
             do_dump=1
             shift
             ;;
-        --calibrate)
+        calibrate)
             do_calibrate=1
             shift
             ;;
-        --stage)
+        stage)
             do_stage=1
             shift
             ;;
-        --dates)
+        dates)
             get_dates
             exit 0
             ;;
-        --index)
+        index)
             index_dirs
             exit 0
             ;;
-        --help|-h)
+        publish)
+            publish_link
+            exit 0
+            ;;
+        help|-h)
             usage
             exit 0
             ;;
-        -*)
-            echo "Unknown argument: $1"
-            usage
-            exit 1
-            ;;
-        *)
+        20*)
             if [[ -z "$dates" ]] ; then
                 dates="$1"
             else
                 dates="$dates $1"
             fi
             shift
+            ;;
+        *)
+            echo "Unknown argument: $1"
+            usage
+            exit 1
             ;;
     esac
 done
