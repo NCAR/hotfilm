@@ -14,7 +14,7 @@ import pytest
 
 from hotfilm.read_hotfilm import ReadHotfilm
 from hotfilm.time_formatter import time_formatter
-from hotfilm.utils import td_to_microseconds
+import hotfilm.utils as utils
 from dump_hotfilm import main
 
 logger = logging.getLogger(__name__)
@@ -328,8 +328,8 @@ def test_td_to_microseconds():
         dt.timedelta(microseconds=1000000001): 1000000001
     }
     for td, xusec in tests.items():
-        assert td_to_microseconds(td) == xusec
-        assert isinstance(td_to_microseconds(td), int)
+        assert utils.td_to_microseconds(td) == xusec
+        assert isinstance(utils.td_to_microseconds(td), int)
 
 
 def remove_attributes(ds: xr.Dataset, attrs: list[str]) -> None:
@@ -363,7 +363,16 @@ def compare_netcdf(xout: Path, xbase: Path,
         }
         tds = tds.sel(**window)
         xds = xds.sel(**window)
-    ignores = ["history", "command_line", "version"]
+    # ensure the attributes are in the output before removing them for the
+    # comparision.  repo_url should be identical, but ignoring it avoids
+    # changing the baseline.
+    assert tds.attrs.get('history')
+    assert tds.attrs.get('command_line')
+    assert tds.attrs.get('repo_version')
+    assert tds.attrs.get('repo_url') == utils.get_repo_url()
+    ignores = ["history", "command_line", "repo_version", "repo_url"]
+    # ignore the old attribute names also
+    ignores += ["dump_hotfilm_version", "dump_hotfilm_command_line"]
     remove_attributes(tds, ignores)
     remove_attributes(xds, ignores)
     xout = xout.relative_to(Path.cwd())
@@ -381,10 +390,10 @@ def compare_netcdf(xout: Path, xbase: Path,
         pytest.fail(f"netcdf datasets {xbase} and {xout} differ, "
                     f"but {nc_compare} not found to show differences.")
     args = [nc_compare, xbase, xout,
-            "--ignore", "*version",
-            "--ignore", "history",
-            "--ignore", "*command_line",
             "--showindex", "--showtimes", "--nans-equal", "--showequal"]
+    for att in ignores:
+        args += ["--ignore", att]
+
     args = [str(arg) for arg in args]
     logger.debug("comparing: %s", " ".join(args))
     assert sp.check_call(args) == 0
