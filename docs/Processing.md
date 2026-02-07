@@ -91,7 +91,7 @@ voltages to wind speeds.
 ## Production processing
 
 The production data processing is scripted in the
-[run_dates.sh](../run_dates.sh) script.  The script automates multiple
+[run_hotfilm.sh](../run_hotfilm.sh) script.  The script automates multiple
 processing steps and also ensures consistent commands, arguments, and file
 layouts are used for each run.
 
@@ -117,7 +117,7 @@ the scripts can be called without paths, eg:
 
     export PATH=/opt/local/m2hats/hotfilm:${PATH}
 
-The `run_dates.sh` script performs these steps:
+The `run_hotfilm.sh` script performs these steps:
 
  1. Run `dump_hotfilm.py` to convert the raw hotfilm voltage data files to
     netCDF, expecting the raw data to be located in
@@ -140,17 +140,17 @@ generated (hotfilm voltages) or staged (sonic winds) into the same directory,
 before the calibrated hotfilm wind speeds are generated.
 
     cd /scr/isfs/projects/M2HATS
-    cd `run_dates.sh create`
-    run_dates.sh
+    cd `run_hotfilm.sh create`
+    run_hotfilm.sh
 
 When the run output is ready to be released through the web site, these steps
 create the web index in the output and link the output to the web filesystem:
 
-    run_dates.sh index
-    run_dates.sh publish
+    run_hotfilm.sh index
+    run_hotfilm.sh publish
 
 If necessary, steps can be run separately.  See the usage info with `-h` or
 `help`.
 
-The `run_dates.sh` script processes multiple days in parallel, either the
+The `run_hotfilm.sh` script processes multiple days in parallel, either the
 default set of days or the dates specified on the command line.

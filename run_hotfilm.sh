@@ -224,7 +224,7 @@ if [ -z "$dates" ]; then
 fi
 
 for day in $dates ; do
-    run_date $day >& run_dates.${day}.log &
+    run_date $day >& run_hotfilm.${day}.log &
 done
 
 wait
