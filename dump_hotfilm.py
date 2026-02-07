@@ -93,6 +93,16 @@ def main(argv: List[str]):
     else:
         hf.write_text(sys.stdout)
 
+    logger.log(logging.WARNING if hf.nwarnings else logging.DEBUG,
+               f"{hf.nwarnings} warnings.")
+    if hf.nwarnings > 0:
+        sys.stderr.write(f"{hf.nwarnings} warnings.  "
+                         "Check the logs for details.\n")
+    logger.log(logging.INFO if hf.ncorrected else logging.DEBUG,
+               f"{hf.ncorrected} corrected samples.")
+    if hf.ncorrected > 0:
+        sys.stdout.write(f"{hf.ncorrected} corrected samples.\n")
+
 
 if __name__ == "__main__":
     main(sys.argv)

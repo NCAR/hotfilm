@@ -14,7 +14,7 @@ import pytest
 
 from hotfilm.read_hotfilm import ReadHotfilm
 from hotfilm.time_formatter import time_formatter
-from hotfilm.utils import td_to_microseconds
+import hotfilm.utils as utils
 from dump_hotfilm import main
 
 logger = logging.getLogger(__name__)
@@ -26,35 +26,37 @@ def ft(dt64):
 
 def test_datetime_from_match():
     tests = {
-        "2023 06 30 21:59:27.8075 200, 521    8000 1 2 3 4":
+        "2023-06-30T21:59:27.8075 200, 521    8000 1 2 3 4":
         dt.datetime(2023, 6, 30, 21, 59, 27, 807500),
-        "2023 06 30 21:59:27 200, 521    8000 1 2 3 4":
+        "2023-06-30T21:59:27 200, 521    8000 1 2 3 4":
         dt.datetime(2023, 6, 30, 21, 59, 27, 0),
-        "2023 06 30 21:59:27.0 200, 521    8000 1 2 3 4":
+        "2023-06-30T21:59:27.0 200, 521    8000 1 2 3 4":
         dt.datetime(2023, 6, 30, 21, 59, 27, 0),
-        "2023 07 20 01:02:04.3950 200, 521   8000 1 2 3 4":
+        "2023-07-20T01:02:04.3950 200, 521   8000 1 2 3 4":
         dt.datetime(2023, 7, 20, 1, 2, 4, 395000),
-        "2023 07 20 01:02:04.000002 200, 521   8000 1 2 3 4":
+        "2023-07-20T01:02:04.000002 200, 521   8000 1 2 3 4":
         dt.datetime(2023, 7, 20, 1, 2, 4, 2)
     }
     hf = ReadHotfilm()
     for line, xwhen in tests.items():
-        data = hf.parse_line(line)
+        data = hf.parse_line(line, None)
         assert data is not None
         assert data.time.data[0] == np.datetime64(xwhen)
 
 # flake8: noqa: E501
 _scan = """
-2023 07 20 01:02:03.3950 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
+2023-07-20T01:02:03.3950 200, 521  2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.2114854
 """.strip()
 
 
 def test_parse_line():
     hf = ReadHotfilm()
-    ch1 = hf.parse_line(_scan)
-    assert ch1 is not None
+    scan = hf.parse_line(_scan, None)
+    assert scan is not None
+    ch1 = scan['ch1']
     logger.debug(ch1)
     y = ch1.data
+    assert ch1.dtype == np.float32
     x = ch1.time.data
     assert len(ch1) == 8
     assert len(x) == 8
@@ -63,25 +65,62 @@ def test_parse_line():
     assert when.isoformat() == "2023-07-20T01:02:03.395000"
     assert when.strftime("%Y%m%d_%H%M%S") == "20230720_010203"
     assert x[-1] == x[0] + (7 * np.timedelta64(125000, 'us'))
-    assert y.data[0] == 2.4023
-    assert y.data[-1] == 2.4093
+    assert y.data[0] == pytest.approx(2.3157625)
+    assert y.data[-1] == pytest.approx(2.2114854)
+
+
+_sixp = """
+2023-09-20T18:15:42.843250 200, 501      24      35438        627          0         13        496     531229
+""".strip()
+
+
+def test_microsecond_times():
+    hf = ReadHotfilm()
+    scan = hf.parse_line(_sixp, None)
+    assert scan is not None
+    xtime = np.datetime64(dt.datetime(2023, 9, 20, 18, 15, 42, 843250))
+    assert scan[hf.SCAN_DIM].data[0] == xtime
 
 
 def test_get_period():
     hf = ReadHotfilm()
-    data = hf.parse_line(_scan)
+    data = hf.parse_line(_scan, None)
     period = (hf.get_period_end(data) - data.time[0]).data
     interval = hf.get_interval(data)
     assert interval == 125000
     assert pd.to_timedelta(period).total_seconds() == 1
 
 
+_scan_half_hour = """
+2023-07-20T00:32:03.3950 200, 521  2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.2114854
+""".strip()
+
+
+def test_get_window():
+    "Make sure time window contains the start of the dataset."
+    hf = ReadHotfilm()
+    assert hf.file_interval == np.timedelta64(60, 'm')
+    data = hf.parse_line(_scan, None)
+    begin, end = hf.get_window(data)
+    assert begin <= data.time[0]
+    assert end > data.time[0]
+    assert begin == np.datetime64(dt.datetime(2023, 7, 20, 1, 0, 0, 0))
+    assert end == np.datetime64(dt.datetime(2023, 7, 20, 2, 0, 0, 0))
+    # now test if the first time is closer to the end of the interval
+    data = hf.parse_line(_scan_half_hour, None)
+    begin, end = hf.get_window(data)
+    assert begin <= data.time[0]
+    assert end > data.time[0]
+    assert begin == np.datetime64(dt.datetime(2023, 7, 20, 0, 0, 0, 0))
+    assert end == np.datetime64(dt.datetime(2023, 7, 20, 1, 0, 0, 0))
+
+
 _line1 = """
-2023 07 20 01:02:03.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
+2023-07-20T01:02:03.0 200, 521  2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.2114854
 """.strip()
 
 _line2 = """
-2023 07 20 01:02:04.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
+2023-07-20T01:02:04.0 200, 521  2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.2114854
 """.strip()
 
 
@@ -108,12 +147,12 @@ def check_and_append(hf: ReadHotfilm, data: xr.Dataset, next: xr.Dataset,
 
 def test_is_contiguous():
     hf = ReadHotfilm()
-    data = hf.parse_line(_line1)
+    data = hf.parse_line(_line1, None)
     xfirst = np.datetime64(dt.datetime(2023, 7, 20, 1, 2, 3, 0))
     assert data.time.data[0] == xfirst
     # after the first scan adjust should still be zero.
     assert hf.adjust_time == 0
-    next = hf.parse_line(_line2)
+    next = hf.parse_line(_line2, None)
     xfirst = np.datetime64(dt.datetime(2023, 7, 20, 1, 2, 4, 0))
     assert next.time.data[0] == xfirst
     assert hf.adjust_time == 0
@@ -142,16 +181,15 @@ def test_is_contiguous():
 
 
 _scanfill = """
-2023 07 20 00:00:00.0395 200, 521   8000     2.4023     2.4384     -9999.0     2.2848     2.2601     2.3793     2.4415     2.4093
+2023-07-20T00:00:00.0395 200, 521  2.3157625  2.2800555  -9999  2.1745145  2.2734196  2.2863753   2.325242  2.2114854
 """.strip()
 
 
 def test_scan_skip():
     hf = ReadHotfilm()
-    data = hf.parse_line(_scanfill)
+    data = hf.parse_line(_scanfill, None)
     assert data is not None
-    ds = xr.Dataset({data.name: data})
-    assert hf.skip_scan(ds)
+    assert hf.skip_scan(data)
 
 
 def test_time_format():
@@ -175,11 +213,16 @@ def test_s_format():
 
 
 _block_lines = """
-2023 07 20 01:02:03.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
-2023 07 20 01:02:04.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
-2023 07 20 01:02:05.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
-2023 07 20 01:02:13.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
-2023 07 20 01:02:14.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
+2023-07-20T01:02:03.0 200, 521   2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.2114854
+2023-07-20T01:02:03.0 200, 501   0 0
+2023-07-20T01:02:04.0 200, 521   2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.2114854
+2023-07-20T01:02:04.0 200, 501   1 0
+2023-07-20T01:02:05.0 200, 521   2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.2114854
+2023-07-20T01:02:05.0 200, 501   2 0
+2023-07-20T01:02:13.0 200, 521   2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.2114854
+2023-07-20T01:02:13.0 200, 501   10 0
+2023-07-20T01:02:14.0 200, 521   2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.2114854
+2023-07-20T01:02:14.0 200, 501   11 0
 """.strip().splitlines()
 
 
@@ -223,11 +266,16 @@ def test_long_enough_blocks():
 
 
 _skip_lines = """
-2023 07 20 01:02:03.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
-2023 07 20 01:02:04.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4093
-2023 07 20 01:02:05.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.4000
-2023 07 20 01:02:06.0 200, 521   8000     2.4023     2.4384    -9999.0     2.2848     2.2601     2.3793     2.4415     2.4093
-2023 07 20 01:02:07.0 200, 521   8000     2.4023     2.4384     2.3979     2.2848     2.2601     2.3793     2.4415     2.8000
+2023-07-20T01:02:03.0 200, 521   2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.0114854
+2023-07-20T01:02:03.0 200, 501   0 0
+2023-07-20T01:02:04.0 200, 521   2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.1114854
+2023-07-20T01:02:04.0 200, 501   1 0
+2023-07-20T01:02:05.0 200, 521   2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.2114854
+2023-07-20T01:02:05.0 200, 501   2 0
+2023-07-20T01:02:06.0 200, 521   2.3157625  2.2800555    -9999.0  2.1745145  2.2734196  2.2863753   2.325242  2.4114854
+2023-07-20T01:02:06.0 200, 501   3 0
+2023-07-20T01:02:07.0 200, 521   2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.5114854
+2023-07-20T01:02:07.0 200, 501   4 0
 """.strip().splitlines()
 
 
@@ -241,12 +289,12 @@ def test_skip_blocks():
     ds = hf.get_block()
     # first block should break at the -9999
     assert ds is not None and len(ds.time) == 24
-    assert ds['ch1'].data[23] == 2.4
+    assert ds['ch1'].data[23] == pytest.approx(2.2114854)
     logger.debug("second get_block() call...")
     ds = hf.get_block()
     # should still get a block with one scan
     assert ds is not None and len(ds.time) == 8
-    assert ds['ch1'].data[7] == 2.8
+    assert ds['ch1'].data[7] == pytest.approx(2.5114854)
 
 
 def test_get_minutes():
@@ -280,8 +328,8 @@ def test_td_to_microseconds():
         dt.timedelta(microseconds=1000000001): 1000000001
     }
     for td, xusec in tests.items():
-        assert td_to_microseconds(td) == xusec
-        assert isinstance(td_to_microseconds(td), int)
+        assert utils.td_to_microseconds(td) == xusec
+        assert isinstance(utils.td_to_microseconds(td), int)
 
 
 def remove_attributes(ds: xr.Dataset, attrs: list[str]) -> None:
@@ -305,11 +353,26 @@ def compare_netcdf(xout: Path, xbase: Path,
     # make sure we get permissions ugo=r also
     assert xout.stat().st_mode & 0o444 == 0o444
     tds = xr.open_dataset(xout)
+    # make sure the time dimension is increasing
+    assert np.all(np.diff(tds.time.data) > np.timedelta64(0, 'us')), \
+        "time dimension is not strictly increasing: " + str(xout)
     xds = xr.open_dataset(xbase)
     if begin and end:
-        tds = tds.sel(time=slice(begin, end))
-        xds = xds.sel(time=slice(begin, end))
-    ignores = ["history", "command_line", "version"]
+        window = {
+            "time": slice(begin, end), "time_scan_start": slice(begin, end)
+        }
+        tds = tds.sel(**window)
+        xds = xds.sel(**window)
+    # ensure the attributes are in the output before removing them for the
+    # comparision.  repo_url should be identical, but ignoring it avoids
+    # changing the baseline.
+    assert tds.attrs.get('history')
+    assert tds.attrs.get('command_line')
+    assert tds.attrs.get('repo_version')
+    assert tds.attrs.get('repo_url') == utils.get_repo_url()
+    ignores = ["history", "command_line", "repo_version", "repo_url"]
+    # ignore the old attribute names also
+    ignores += ["dump_hotfilm_version", "dump_hotfilm_command_line"]
     remove_attributes(tds, ignores)
     remove_attributes(xds, ignores)
     xout = xout.relative_to(Path.cwd())
@@ -327,10 +390,10 @@ def compare_netcdf(xout: Path, xbase: Path,
         pytest.fail(f"netcdf datasets {xbase} and {xout} differ, "
                     f"but {nc_compare} not found to show differences.")
     args = [nc_compare, xbase, xout,
-            "--ignore", "*version",
-            "--ignore", "history",
-            "--ignore", "*command_line",
             "--showindex", "--showtimes", "--nans-equal", "--showequal"]
+    for att in ignores:
+        args += ["--ignore", att]
+
     args = [str(arg) for arg in args]
     logger.debug("comparing: %s", " ".join(args))
     assert sp.check_call(args) == 0
@@ -341,14 +404,11 @@ _this_dir = Path(__file__).parent
 _test_data_dir = Path("test_data")
 _test_out_dir = Path("test_out")
 
-def test_netcdf_output():
-    datfile = _test_data_dir / "channel2_20230804_180000_05.dat"
-    (_this_dir / _test_out_dir).mkdir(exist_ok=True)
-    xout = _this_dir / _test_out_dir / "channel2_20230804_180000_005.nc"
-    xout.unlink(missing_ok=True)
-    args = ["--keep-contiguous", "--interval", "0",
-            "--netcdf", _test_out_dir / "channel2_%Y%m%d_%H%M%S.nc",
-            "--channel", "2", datfile]
+
+def run_dump_hotfilm(args: list[str]) -> None:
+    """
+    Run dump_hotfilm.py with the given arguments from the test directory.
+    """
     args = [str(arg) for arg in args]
     logger.debug("dumping: %s", " ".join(args))
     try:
@@ -358,6 +418,17 @@ def test_netcdf_output():
         if fe.filename == "data_dump":
             pytest.xfail("data_dump not found.")
         raise
+
+
+def test_netcdf_output():
+    datfile = _test_data_dir / "channel2_20230804_180000_05.dat"
+    (_this_dir / _test_out_dir).mkdir(exist_ok=True)
+    xout = _this_dir / _test_out_dir / "channel2_20230804_180000_005.nc"
+    xout.unlink(missing_ok=True)
+    args = ["--keep-contiguous", "--interval", "0",
+            "--netcdf", _test_out_dir / "channel2_%Y%m%d_%H%M%S.nc",
+            "--channel", "2", datfile]
+    run_dump_hotfilm(args)
     xbase = _this_dir / "baseline" / "channel2_20230804_180000_005.nc"
     compare_netcdf(xout, xbase)
 
@@ -371,15 +442,7 @@ def test_netcdf_output_not_contiguous():
     args = ["--interval", "0", "--netcdf",
             _test_out_dir / "channel2_skips_%Y%m%d_%H%M%S.nc",
             "--channel", "2", datfile]
-    args = [str(arg) for arg in args]
-    logger.debug("dumping: %s", " ".join(args))
-    try:
-        with contextlib.chdir(_this_dir):
-            main(['dump_hotfilm.py'] + args)
-    except FileNotFoundError as fe:
-        if fe.filename == "data_dump":
-            pytest.xfail("data_dump not found.")
-        raise
+    run_dump_hotfilm(args)
     xbase = _this_dir / "baseline" / "channel2_skips_20230804_180000_005.nc"
     compare_netcdf(xout, xbase)
 
@@ -390,20 +453,13 @@ def test_netcdf_output_file_intervals():
     (_this_dir / _test_out_dir).mkdir(exist_ok=True)
     xout = []
     for min in [0, 1, 2, 3, 4, 5]:
-        xout.append(_this_dir / _test_out_dir / f"channel2_20230804_18{min:02d}00.nc")
+        xout.append(_this_dir / _test_out_dir /
+                    f"channel2_20230804_18{min:02d}00.nc")
         xout[-1].unlink(missing_ok=True)
     args = ["--interval", "1",
             "--netcdf", _test_out_dir / "channel2_%Y%m%d_%H%M%S.nc",
             "--channel", "2", datfile]
-    args = [str(arg) for arg in args]
-    logger.debug("dumping: %s", " ".join(args))
-    try:
-        with contextlib.chdir(_this_dir):
-            main(['dump_hotfilm.py'] + args)
-    except FileNotFoundError as fe:
-        if fe.filename == "data_dump":
-            pytest.xfail("data_dump not found.")
-        raise
+    run_dump_hotfilm(args)
     # make sure 1805 file was not created
     assert xout[-1].exists() is False
     xbase = _this_dir / "baseline" / "channel2_skips_20230804_180000_005.nc"
@@ -422,14 +478,18 @@ def create_lines(when: dt.datetime, nchannels: int, nscans: int,
     given sample rate, create a list of lines with sample data.
     """
     lines = []
-    fmt = "%Y %m %d %H:%M:%S.0"
+    fmt = "%Y-%m-%dT%H:%M:%S.000000"
+    count = 0
     for iscan in range(nscans):
         for ch in range(nchannels):
-            line = f"{when.strftime(fmt)} 200, {521+ch}   8000"
+            line = f"{when.strftime(fmt)} 200, {521+ch}  "
             line += " 2.4" * sample_rate
             line += "\n"
             lines.append(line)
+        line = f"{when.strftime(fmt)} 200, 501   {count}  0"
+        lines.append(line)
         when += dt.timedelta(seconds=1)
+        count += 1
     return lines
 
 
@@ -464,3 +524,34 @@ def test_sample_rate():
     assert len(ds[1].time) == 20
 
     assert not list(hf.read_scans())
+
+
+def test_backwards_timestamps():
+    datfile = _test_data_dir / "channel2_20230920_005950.dat"
+    (_this_dir / _test_out_dir).mkdir(exist_ok=True)
+    xout = _this_dir / _test_out_dir / "channel2_20230920_005950_000.nc"
+    xout.unlink(missing_ok=True)
+    args = ["--interval", "0", "--netcdf",
+            _test_out_dir / "channel2_%Y%m%d_%H%M%S.nc",
+            "--channel", "2", datfile]
+    run_dump_hotfilm(args)
+    xbase = _this_dir / "baseline" / "channel2_20230920_005950_000.nc"
+    compare_netcdf(xout, xbase)
+
+
+_housekeeping_line = """
+2023-09-20T00:59:55.8450 200, 501    38827        620          0         18        498     529055
+""".strip()
+
+
+def test_housekeeping_line():
+    hf = ReadHotfilm()
+    when = dt.datetime(2023, 9, 20, 0, 59, 55, 845000)
+    scan = hf.parse_line(_housekeeping_line, None)
+    assert scan is not None
+    assert 'pps_count' in scan
+    pps_count = scan['pps_count']
+    assert pps_count.data[0] == 38827
+    assert scan['pps_step'].data[0] == 620
+    assert scan['pps_step'].dtype == np.int32
+    assert scan.time_scan_start.data[0] == np.datetime64(when)

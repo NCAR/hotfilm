@@ -2,6 +2,10 @@
 
 ## [unreleased] - Pending changes
 
+The `dump_hotfilm.py` conversion to netcdf now includes the housekeeping
+variables `pps_step` and `pps_count`, since they are necessary to detect
+errors in the raw timestamps and recover from them.
+
 Added the `--interval` argument to `dump_hotfilm.py` to write the netcdf files
 at fixed intervals, by default one hour.  The `--min` and `--max` arguments
 now default to 0, so unless they are specified, all data are written and file
