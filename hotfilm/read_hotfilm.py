@@ -18,6 +18,7 @@ import xarray as xr
 from hotfilm.outout_path import OutputPath
 from hotfilm.utils import combine_datasets
 from hotfilm.utils import convert_time_coordinate
+from hotfilm.utils import td_to_microseconds
 from hotfilm.utils import split_dataset
 from hotfilm.utils import add_history_to_dataset
 from hotfilm.utils import rdatetime
@@ -210,7 +211,32 @@ class ReadHotfilm:
         channels.
         """
         skip = any([(x == -9999.0).any() for x in scan.data_vars.values()])
-        # logger.debug("skip_scan is '%s' on data: %s", skip, scan)
+        if not skip:
+            return skip
+        # log some details with the indices of the dummy values in each
+        # of the variables.
+        for v in scan.data_vars.values():
+            indices = np.where(v == -9999.0)[0]
+            nvalues = len(indices)
+            if indices.size == 0:
+                continue
+            begin, end = None, None
+            fill_ranges = []
+            for i in indices:
+                if begin is None:
+                    begin, end = i, i
+                elif i == end + 1:
+                    end = i
+                else:
+                    fill_ranges.append((int(begin), int(end)))
+                    begin, end = None, None
+            if begin is not None:
+                fill_ranges.append((int(begin), int(end)))
+
+            logger.debug("scan %s, variable %s[0, %d], "
+                         "%d dummy values at indices: %s", _ft(scan.time[0]),
+                         v.name, len(v)-1, nvalues, fill_ranges)
+
         return skip
 
     def get_scan(self) -> Optional[xr.Dataset]:
@@ -348,7 +374,7 @@ adj scan strt: %s
         if last_scan is None or scan is None:
             return
 
-        time_diff = scan.time[0] - last_scan.time[0]
+        time_diff = (scan.time[0] - last_scan.time[0]).data
         if time_diff < 0:
             # this likely means the last scan had the wrong time and this one
             # is catching up, which is a problem, but it's too late to do
@@ -378,10 +404,11 @@ adj scan strt: %s
                     count1 >= 0 and count2 >= 0):
                 self.nwarnings += 1
                 logger.warning("non-contiguous scan at %s with small "
-                               "time difference %s: "
+                               "time difference %s us: "
                                "pps count %d to %d, "
                                "pps step %d to %d",
-                               _ft(scan.time[0]), time_diff,
+                               _ft(scan.time[0]),
+                               td_to_microseconds(time_diff),
                                count1, count2, step1, step2)
             return
 
