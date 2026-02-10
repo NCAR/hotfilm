@@ -554,10 +554,11 @@ adj scan strt: %s
             if scan and period_start is None:
                 period_start = scan.time[0].data
             if scan:
-                logger.debug("handling next scan: %d variables, "
-                             "%d samples/channel, at %s",
-                             len(scan.data_vars), len(scan.time),
-                             _ft(scan.time[0]))
+                logger.debug("handling scan %s: %d variables, "
+                             "%d samples/channel, count=%d, step=%d",
+                             _ft(scan.time[0]), len(scan.data_vars),
+                             len(scan.time), scan['pps_count'][0].data,
+                             scan['pps_step'][0].data)
             if scan and not self.sample_rate:
                 self.sample_rate = len(scan.time)
                 logger.debug("set sample rate: %s", self.sample_rate)
