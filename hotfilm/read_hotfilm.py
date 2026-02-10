@@ -59,16 +59,16 @@ def _datetime_from_match(match) -> np.datetime64:
 
 class HotfilmDataNotice:
     """
-    Encapsulate anomalies and discrepancies in the data processing, such as a
+    Encapsulate anomalies and discrepancies in the data processing, such as
     warnings or corrections, so they can be logged, reported at the end, and
-    also included in the data as needed.  A notice can have the sample time of
-    the output scan related to the notice.  If the scan time was corrected,
-    then the notice contains the corrected time so it can be lined up with the
-    data in the output.  The goal is to capture structured information about
-    kinds of corrections and warnings, so they can reported in the output in a
-    form that could later be parsed for information, while also writing the
-    notice to the log.  Notices without times can still be ordered relative to
-    other notices.
+    also included in the data as needed.  A notice can refer to the sample
+    time of a specific output scan.  If the scan time was corrected, then the
+    notice contains the corrected time so it can be lined up with the data in
+    the output.  The goal is to capture structured information for different
+    kinds of corrections, warnings, and notices, so the notices can be
+    reported in the output in a form that could later be parsed for
+    information, while also writing the notice to the log.  Notices without
+    times can still be ordered relative to other notices.
     """
 
     def __init__(self, scan: xr.Dataset = None):
@@ -106,6 +106,33 @@ class HotfilmDataNotice:
         logger.warning(message)
         self.nwarnings += 1
         return self
+
+    def notice(self, message: str):
+        "Set a message that is not necessarily a warning, logged as info."
+        self.message = message
+        logger.info(message)
+        return self
+
+    def to_string(self) -> str:
+        """
+        Return a string representation which tries to preserve the structured
+        information. Perhaps JSON could be used instead, but this is more
+        human readable and hopefully still parseable.
+        """
+        buffer = ""
+        if self.scantime is not None:
+            buffer += f"scantime={_ft(self.scantime)}; "
+        if self.ncorrected:
+            buffer += f"ncorrected={self.ncorrected}; "
+        if self.nfilled:
+            buffer += f"nfilled={self.nfilled}; "
+        if self.nwarnings:
+            buffer += f"nwarnings={self.nwarnings}; "
+        if self.fill_ranges:
+            buffer += f"fill_ranges={self.fill_ranges}; "
+        if self.message:
+            buffer += f"message={self.message}; "
+        return buffer.strip()
 
 
 class ReadHotfilm:
@@ -178,13 +205,17 @@ class ReadHotfilm:
         # exactly at the nominal sample rate, even when the labjack clock
         # drifts relative to GPS.
         self.keep_contiguous = False
+        # keep two notices lists, one for all notices and one for the next
+        # dataset to write out.  this way there is a summary of all notices
+        # across all datasets to report at the end.
         self.notices = []
+        self.all_notices = []
 
     def nwarnings(self):
-        return sum([n.nwarnings for n in self.notices])
+        return sum([n.nwarnings for n in self.all_notices])
 
     def ncorrected(self):
-        return sum([n.ncorrected for n in self.notices])
+        return sum([n.ncorrected for n in self.all_notices])
 
     def notice(self, scan: xr.Dataset = None) -> HotfilmDataNotice:
         """
@@ -192,7 +223,12 @@ class ReadHotfilm:
         """
         hdn = HotfilmDataNotice(scan)
         self.notices.append(hdn)
+        self.all_notices.append(hdn)
         return hdn
+
+    def clear_notices(self):
+        "Clear the current notices.  Useful after writing out with a Dataset."
+        self.notices.clear()
 
     def set_command_line(self, argv: List[str]):
         self.command_line = " ".join([f"'{arg}'" if ' ' in arg else arg
@@ -505,7 +541,7 @@ adj scan strt: %s
             self.notice(scan).time_corrected_from(time0)
 
         if bad_step is not None:
-            self.notice(scan).warning(
+            self.notice(scan).notice(
                 f"{_ft(scan.time[0])}: "
                 f"fixed pps_step from {bad_step} to {step2}")
 
@@ -514,9 +550,6 @@ adj scan strt: %s
         # corrected, since the scan was otherwise determined to be contiguous.
         if fix:
             self.fill_scan(scan)
-
-
-
 
     def read_scans(self) -> Generator[xr.Dataset, None, None]:
         """
@@ -827,6 +860,37 @@ adj scan strt: %s
                     self.file_interval, _ft(begin), _ft(end))
         return begin, end
 
+    def _add_notices(self, ds: xr.Dataset) -> xr.Dataset:
+        """
+        Add current notices to this Dataset along a new time coordinate.
+        Notices without times are given the time of the first sample in the
+        Dataset or the preceding notice.
+        """
+        ctime = ds.time[0].data
+        times = []
+        messages = []
+        notices = self.notices
+        # seems more natural to have at least one notice.  otherwise, the
+        # empty notices dimension defaults to an unlimited dimension of size 0
+        # when written to netcdf by xarray.  and we don't want to omit the
+        # notices entirely, since it's less clear whether the output file was
+        # written before notices were added or just didn't have any notices.
+        if not notices:
+            hdn = HotfilmDataNotice()
+            hdn.message = "No notices"
+            notices = [hdn]
+        for notice in notices:
+            if notice.scantime is not None:
+                ctime = notice.scantime
+            times.append(ctime)
+            messages.append(notice.to_string())
+        ds['notices'] = xr.DataArray(messages, name='notices',
+                                     coords={'time_notices': times})
+        # convert the time coordinate using the same base time as the scans,
+        # so the offsets in the notice times line up with the samples.
+        ds = convert_time_coordinate(ds, ds.time_notices, ds.time.data[0])
+        return ds
+
     def write_netcdf_file(self, filespec: str):
         """
         Like write_text_file(), but write to a netcdf file.  Create a time
@@ -883,16 +947,12 @@ adj scan strt: %s
                 # length is not useful on fixed file intervals.
                 period = None
                 ncds, ds = split_dataset(ds, ['time', self.SCAN_DIM], end)
+
+            # add notices before the time coordinates are converted
+            ncds = self._add_notices(ncds)
+            self.clear_notices()
             ncds = self._add_netcdf_attrs(ncds)
-            # make sure data variables have type float32, but not scan
-            # variables
-            encodings = {
-                var.name: {'dtype': 'float32' if var.name.startswith('ch')
-                           else 'int32'}
-                for var in ncds.data_vars.values()
-            }
-            ncds.to_netcdf(tfile.name, engine='netcdf4', format='NETCDF4',
-                           encoding=encodings)
+            ncds.to_netcdf(tfile.name, engine='netcdf4', format='NETCDF4')
             # for file intervals, rename to the interval start
             outpath.finish(period, begin)
             # advance file window or reset it according to remaining data

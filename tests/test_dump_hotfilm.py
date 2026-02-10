@@ -359,6 +359,12 @@ def compare_netcdf(xout: Path, xbase: Path,
         "time dimension is not strictly increasing: " + str(xout)
     xds = xr.open_dataset(xbase)
     if begin and end:
+        # can't really compare notices this way, since each file will have at
+        # least one notice, so delete them first.
+        del xds['notices']
+        del tds['notices']
+        del xds['time_notices']
+        del tds['time_notices']
         window = {
             "time": slice(begin, end), "time_scan_start": slice(begin, end)
         }

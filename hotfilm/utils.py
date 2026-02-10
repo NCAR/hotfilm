@@ -53,15 +53,22 @@ def iso_to_datetime64(iso: str) -> np.datetime64:
 
 
 def convert_time_coordinate(ds: xr.Dataset, dt: xr.DataArray,
+                            basetime: np.datetime64 | None = None,
                             ustep: str = "microseconds") -> xr.Dataset:
     """
     Convert a time coordinate in a Dataset to int64 microseconds or seconds
     since the first time in the coordinate array.  @p ustep is "seconds" or
-    "microseconds".
+    "microseconds".  Use @p basetime as the base time if provided, otherwise
+    use the first time in the @p dt coordinate array.
     """
     # numerous and varied attempts failed to get xarray to encode
     # the time as microseconds since base, so do it manually.
-    when = pd.to_datetime(dt.data[0])
+    if len(dt) == 0:
+        logger.debug("no times in coordinate, skipping conversion")
+        return ds
+    if basetime is None:
+        basetime = dt.data[0]
+    when = pd.to_datetime(basetime)
     base = when.replace(microsecond=0)
     units = (f'{ustep} since %s' %
              base.strftime("%Y-%m-%d %H:%M:%S+00:00"))
