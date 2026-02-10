@@ -7,8 +7,7 @@
 # Output will go into subdirectories of the current directory by default.
 
 hotfilmdir=/opt/local/m2hats/hotfilm
-dataroot=/scr/isfs/projects/M2HATS
-rawdata=${dataroot}/raw_data
+rawdata=/scr/isfs/projects/M2HATS/raw_data
 sonics=/export/flash/isf/isfs/data/M2HATS/20250113/hr_qc_instrument/
 local_sonics="hr_qc_instrument"
 speed_spec=hotfilm_wind_speed_%Y%m%d_%H%M%S.nc
@@ -23,8 +22,13 @@ plot_output_spec=${plot_output}/hotfilm_calibrations_%Y%m%d_%H%M%S.png
 
 webroot=/net/www/docs/isf/projects/M2HATS/isfs
 
-dumphotfilm="${hotfilmdir}/dump_hotfilm.py --log info"
-calibrate="${hotfilmdir}/calibrate_hotfilm.py --log info --plot --calibrate"
+# if not already on the path, add the default path to the production scripts.
+if ! command -v dump_hotfilm.py >/dev/null 2>&1 ; then
+    export PATH="${hotfilmdir}:${PATH}"
+fi
+
+dumphotfilm="dump_hotfilm.py --log info"
+calibrate="calibrate_hotfilm.py --log info --plot --calibrate"
 
 do_dump=0
 do_stage=0
@@ -34,8 +38,13 @@ dates=""
 
 usage() {
     cat <<EOF
-Usage: $0 [dump] [calibrate] [stage] [dates] [index] [date ...]
+Usage: $0 [--rawdata DIR] [methods ...] [date ...]
 
+  setup       Print bash command to add hotfilm directory to PATH.
+              Use it like this: eval \$(path/to/run_hotfilm.sh setup)
+  create      Derive and create, if necessary, a run directory based on
+              the current date, and print the directory name.
+              Use it like this: cd \$(run_hotfilm.sh create)
   dump        Convert raw hotfilm data to netCDF
   calibrate   Calibrate hotfilm netcdf against sonics and write wind speed
   stage       Stage sonic data locally
@@ -44,6 +53,9 @@ Usage: $0 [dump] [calibrate] [stage] [dates] [index] [date ...]
   publish     Link this run output to the web filesystem
   date ...    List of dates to process (YYYYMMDD),
               otherwise process default dates.
+  --rawdata DIR
+              Use DIR as the location of the raw hotfilm data files, instead
+              of the default $rawdata.
 
 Default operations are dump and calibrate, calibrate implies stage.
 EOF
@@ -163,6 +175,12 @@ publish_link() {
 
 while [[ $# -gt 0 ]] ; do
     case "$1" in
+        setup)
+            target=`realpath "$0"`
+            pathdir=`dirname "$target"`
+            echo "export PATH=${pathdir}:\$PATH"
+            exit 0
+            ;;
         create)
             rundate=`date +%Y%m%d`
             subdir=hotfilm.$rundate
@@ -193,6 +211,10 @@ while [[ $# -gt 0 ]] ; do
         publish)
             publish_link
             exit 0
+            ;;
+        --rawdata)
+            rawdata="$2"
+            shift 2
             ;;
         help|-h)
             usage
