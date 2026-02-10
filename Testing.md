@@ -53,3 +53,10 @@ v1.2.6 can be used:
 ```
 sensor_extract --samples 200,501 --samples 200,512 --samples 200,522 --start "2023-09-20_00:59:50" --end "2023-09-20_01:00:10" --log info hotfilm_20230920_000000.dat hotfilm_20230920_010000.dat -o channel2_20230920_005950.dat
 ```
+
+This command was used to extract 4 seconds of all channels to test fixing scan
+times with dummy values and replacing them with nans:
+
+```
+sensor_extract -i /,501,[2023-09-20T18:15:38,2023-09-20T18:15:42] -i /,520-523,[2023-09-20T18:15:38,2023-09-20T18:15:42] -o hotfilm_20230920_181538.dat hotfilm_20230920_180000.dat 
+```

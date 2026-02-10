@@ -2,6 +2,17 @@
 
 ## [unreleased] - Pending changes
 
+Sometimes successive scans look contiguous because the `pps_count` is
+consecutive and the sample times are close, but there was some problem during
+recording which caused incorrect sample times to be assigned.  The problem can
+be system lag, causing a read to take too long and the wrong second of system
+time to be used as the sample time reference.  Another problem can be buffer
+overflows, where scans can contain dummy values (-9999) which cause the
+`pps_step` to be incorrect.  `dump_hotfilm.py` now tries to detect cases like
+these.  It can correct the timestamps and replace the dummy values with NaNs.
+All of the scans are kept, including the ones with good values, rather than
+leaving out the entire second of data.
+
 The `dump_hotfilm.py` conversion to netcdf now includes the housekeeping
 variables `pps_step` and `pps_count`, since they are necessary to detect
 errors in the raw timestamps and recover from them.
