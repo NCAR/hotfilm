@@ -501,7 +501,7 @@ adj scan strt: %s
         # there is nothing to be done.  time difference check guards against
         # the extremely unlikely chance that a break in the data somehow still
         # has consecutive counts.
-        if count2 != count1 + 1 or time_diff >= 10*dsecond:
+        if (count1 + 1) % 65536 != count2 or time_diff >= 10*dsecond:
             logger.debug("break in scans from %s (count=%d) to %s (count=%d)",
                          _ft(last_scan.time[0]), count1,
                          _ft(scan.time[0]), count2)

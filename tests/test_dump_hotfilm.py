@@ -573,3 +573,25 @@ def test_housekeeping_line():
     assert scan['pps_step'].data[0] == 620
     assert scan['pps_step'].dtype == np.int32
     assert scan.time_scan_start.data[0] == np.datetime64(when)
+
+
+_rollover_lines = """
+2023-07-20T01:02:03.0 200, 521   2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.0114854
+2023-07-20T01:02:03.0 200, 501   65535 999
+2023-07-20T01:02:04.0 200, 521   2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.1114854
+2023-07-20T01:02:04.0 200, 501   0 999
+""".strip().splitlines()
+
+def test_rollover():
+    "A rollover in pps_count is accepted as a normal consecutive scan."
+    hf = ReadHotfilm()
+    hf.select_channels([1])
+    hf.line_iterator = iter(_rollover_lines)
+    ds = hf.get_block()
+    assert ds is not None and len(ds.time) == 16
+    assert ds['pps_count'].data[0] == 65535
+    assert ds['pps_count'].data[1] == 0
+    assert ds['pps_step'].data[0] == 999
+    assert ds['pps_step'].data[1] == 999
+    assert hf.nwarnings() == 0
+    assert len(hf.notices) == 0
