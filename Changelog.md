@@ -2,6 +2,11 @@
 
 ## [unreleased] - Pending changes
 
+`dump_hotfilm.py` now corrects scans with incorrect `pps_step` or sample times
+but which otherwise are contiguous.  It also replaces the dummy values with
+NaNs rather than skipping the entire second of data. See
+[Processing.md](docs/Processing.md) for details.
+
 The `dump_hotfilm.py` conversion to netcdf now includes the housekeeping
 variables `pps_step` and `pps_count`, since they are necessary to detect
 errors in the raw timestamps and recover from them.

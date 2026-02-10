@@ -3,6 +3,21 @@
 These are notes about reading the raw data files and converting them to other
 output formats, possibly with calibrations to wind speed.
 
+## What is a Scan
+
+Scan is used in two ways in hotfilm data processing:
+
+- In the LabJack AD acquisition, a scan is one scan of all the channels, and
+  scans happen at the scan rate, also sometimes called the sample rate, such
+  as 2 KHz or 4 KHz.  A full second of scans for a channel is collected into
+  one NIDAS raw sample, with one variable containing all of the scans, such as
+  2000 or 4000 values.
+
+- In the `dump_hotfilm.py` script, each channel is read from individual
+  samples in separate lines of `data_dump` output.  So multiple lines of data
+  must be assembled into a complete 1-second scan of data, where the 1-second
+  scan contains all the channels and other housekeeping variables.
+
 ## Exporting hotfilm data as text
 
 The script [dump_hotfilm.py](dump_hotfilm.py) can translate NIDAS archive
@@ -68,6 +83,46 @@ values (-9999) in the data.
 
 When these cases are detected, the hotfilm sample times are corrected to be
 exactly 1 second after the previous sample.
+
+### Samples with incorrect pps_step
+
+Sometimes successive scans have consecutive `pps_count` values, but the
+samples are more or less than 1 second apart, the `pps_step` value jumps, and
+there are dummy values (-9999) in the channel data.
+
+In the hotfilm acquisition code, `pps_step` is set whenever `pps_count`
+changes, and it does not actually distinguish changes to and from -9999.  Thus
+the expected `pps_step` might appear in the first read of the first
+half-second of the sample, at the index where `pps_count` changes.  However,
+in the second half of the sample, `pps_step` changes again when `pps_count`
+contains -9999, and then again when `pps_count` changes back.  Really the
+`pps_count` transition can be lost anywhere in the sample due to buffer
+overflows. As long as at least one scan contains the consecutive value for the
+count, then the succeeding sample can be assumed to be contiguous.
+
+Here are the log messages from one case where `pps_step` jumps due to dummy
+values in the scans:
+
+```
+DEBUG:hotfilm.read_hotfilm:handling scan 2023-09-20T18:15:40.326250: 6 variables, 4000 samples/channel, count=35436, step=2695
+INFO:hotfilm.read_hotfilm:scan time fixed, from 2023-09-20T18:15:40.326250 to 2023-09-20T18:15:40.843000
+WARNING:hotfilm.read_hotfilm:2023-09-20T18:15:40.843000: fixed pps_step from 2695 to 628
+INFO:hotfilm.read_hotfilm:scan 2023-09-20T18:15:40.843000, variable ch0[0, 3999], filled 1446 nans at indices: [(1249, 2694)]
+```
+
+In the raw data, `pps_step` is 2695, the first index after the dummy values
+from [1249, 2694].  The `dump_hotfilm.py` script detects the contiguous
+samples despite the errant `pps_step`, so it corrects the sample times and
+`pps_step`, and it replaces the dummy values with `NaN`. All of the scans are
+kept, including the ones with good values, rather than leaving out the entire
+second of data.
+
+Note that only a subset of a buffer can be filled with dummy values.  The ADC
+was scanning at 4 kHz and the code was reading 2000 scans per read, so the
+first read had missing values at [1249, 1999], and the second read had missing
+values at [2000, 2694].
+
+See [Data-Acquisition.md](Data-Acquisition.md) for more information.
 
 ### Time coordinate variables and ncdump
 

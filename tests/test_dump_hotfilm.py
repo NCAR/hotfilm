@@ -280,21 +280,22 @@ _skip_lines = """
 
 
 def test_skip_blocks():
+    """
+    This used to test that scan blocks would be broken up at the -9999, but
+    now it confirms that the -9999 is filled in instead, even if the time,
+    step, or count do not need to be corrected.
+    """
     hf = ReadHotfilm()
-    hf.keep_contiguous = True
     hf.select_channels([1])
     hf.minblock = 1
     hf.line_iterator = iter(_skip_lines)
     logger.debug("first get_block() call...")
     ds = hf.get_block()
-    # first block should break at the -9999
-    assert ds is not None and len(ds.time) == 24
+    # block should not break at the -9999, but get filled in instead
+    assert ds is not None and len(ds.time) == 40
     assert ds['ch1'].data[23] == pytest.approx(2.2114854)
-    logger.debug("second get_block() call...")
-    ds = hf.get_block()
-    # should still get a block with one scan
-    assert ds is not None and len(ds.time) == 8
-    assert ds['ch1'].data[7] == pytest.approx(2.5114854)
+    assert ds['ch1'].data[39] == pytest.approx(2.5114854)
+    assert np.isnan(ds['ch1'].data[26])
 
 
 def test_get_minutes():
@@ -536,6 +537,17 @@ def test_backwards_timestamps():
             "--channel", "2", datfile]
     run_dump_hotfilm(args)
     xbase = _this_dir / "baseline" / "channel2_20230920_005950_000.nc"
+    compare_netcdf(xout, xbase)
+
+
+def test_fix_and_fill_scan():
+    datfile = _test_data_dir / "hotfilm_20230920_181538.dat"
+    (_this_dir / _test_out_dir).mkdir(exist_ok=True)
+    xout = _this_dir / _test_out_dir / "isfs_20230920_180000.nc"
+    xout.unlink(missing_ok=True)
+    args = ["--netcdf", _test_out_dir / "isfs_%Y%m%d_%H%M%S.nc", datfile]
+    run_dump_hotfilm(args)
+    xbase = _this_dir / "baseline" / "isfs_20230920_180000.nc"
     compare_netcdf(xout, xbase)
 
 

@@ -18,6 +18,7 @@ import xarray as xr
 from hotfilm.outout_path import OutputPath
 from hotfilm.utils import combine_datasets
 from hotfilm.utils import convert_time_coordinate
+from hotfilm.utils import td_to_microseconds
 from hotfilm.utils import split_dataset
 from hotfilm.utils import add_history_to_dataset
 from hotfilm.utils import rdatetime
@@ -54,6 +55,57 @@ def _datetime_from_match(match) -> np.datetime64:
                        seconds, usecs)
     when = np.datetime64(when, 'ns')
     return when
+
+
+class HotfilmDataNotice:
+    """
+    Encapsulate anomalies and discrepancies in the data processing, such as a
+    warnings or corrections, so they can be logged, reported at the end, and
+    also included in the data as needed.  A notice can have the sample time of
+    the output scan related to the notice.  If the scan time was corrected,
+    then the notice contains the corrected time so it can be lined up with the
+    data in the output.  The goal is to capture structured information about
+    kinds of corrections and warnings, so they can reported in the output in a
+    form that could later be parsed for information, while also writing the
+    notice to the log.  Notices without times can still be ordered relative to
+    other notices.
+    """
+
+    def __init__(self, scan: xr.Dataset = None):
+        """
+        @p scan is the scan related to this notice.  It should already have a
+        time dimension, so the first time is used as the time of the notice.
+        """
+        self.message = None
+        self.scantime = scan.time[0].data if scan is not None else None
+        self.ncorrected = 0
+        self.nfilled = 0
+        self.nskipped = 0
+        self.nwarnings = 0
+        self.fill_ranges = None
+
+    def time_corrected_from(self, old_time: np.datetime64):
+        self.message = "scan time fixed, from %s to %s" % (
+            _ft(old_time), _ft(self.scantime))
+        logger.info(self.message)
+        self.ncorrected += 1
+        return self
+
+    def filled_values(self, v: xr.DataArray, nvalues: int,
+                      fill_ranges: List[tuple[int, int]]):
+        self.nfilled += nvalues
+        self.fill_ranges = fill_ranges
+        self.message = (
+            f"scan {_ft(self.scantime)}, variable {v.name}[0, {len(v)-1}], "
+            f"filled {nvalues} nans at indices: {fill_ranges}")
+        logger.info(self.message)
+        return self
+
+    def warning(self, message: str):
+        self.message = message
+        logger.warning(message)
+        self.nwarnings += 1
+        return self
 
 
 class ReadHotfilm:
@@ -126,12 +178,21 @@ class ReadHotfilm:
         # exactly at the nominal sample rate, even when the labjack clock
         # drifts relative to GPS.
         self.keep_contiguous = False
-        # keep track of all warnings to report the count at the end, but don't
-        # bother trying to distinguish them. refer to the log messages for
-        # that.
-        self.nwarnings = 0
-        # number of samples that were corrected but not necessarily warnings
-        self.ncorrected = 0
+        self.notices = []
+
+    def nwarnings(self):
+        return sum([n.nwarnings for n in self.notices])
+
+    def ncorrected(self):
+        return sum([n.ncorrected for n in self.notices])
+
+    def notice(self, scan: xr.Dataset = None) -> HotfilmDataNotice:
+        """
+        Create a notice related to the given scan and return it.
+        """
+        hdn = HotfilmDataNotice(scan)
+        self.notices.append(hdn)
+        return hdn
 
     def set_command_line(self, argv: List[str]):
         self.command_line = " ".join([f"'{arg}'" if ' ' in arg else arg
@@ -210,8 +271,38 @@ class ReadHotfilm:
         channels.
         """
         skip = any([(x == -9999.0).any() for x in scan.data_vars.values()])
-        # logger.debug("skip_scan is '%s' on data: %s", skip, scan)
         return skip
+
+    def fill_scan(self, scan: xr.Dataset) -> xr.Dataset:
+        """
+        Replace any dummy values in this scan with nans, and create a notice
+        about the filled values.
+        """
+        fill_ranges = []
+        nvalues = 0
+        for v in scan.data_vars.values():
+            indices = np.where(v == -9999.0)[0]
+            if indices.size == 0:
+                continue
+            v[indices] = np.nan
+            # the fill ranges are all the same, so compute and log them once
+            if fill_ranges:
+                continue
+            nvalues = len(indices)
+            begin, end = None, None
+            for i in indices:
+                if begin is None:
+                    begin, end = i, i
+                elif i == end + 1:
+                    end = i
+                else:
+                    fill_ranges.append((int(begin), int(end)))
+                    begin, end = None, None
+            if begin is not None:
+                fill_ranges.append((int(begin), int(end)))
+            self.notice(scan).filled_values(v, nvalues, fill_ranges)
+
+        return scan
 
     def get_scan(self) -> Optional[xr.Dataset]:
         """
@@ -348,54 +439,84 @@ adj scan strt: %s
         if last_scan is None or scan is None:
             return
 
-        time_diff = scan.time[0] - last_scan.time[0]
+        time_diff = (scan.time[0] - last_scan.time[0]).data
         if time_diff < 0:
             # this likely means the last scan had the wrong time and this one
             # is catching up, which is a problem, but it's too late to do
             # anything about it.
-            self.nwarnings += 1
-            logger.warning("scan time %s precedes previous scan at %s",
-                           _ft(scan.time[0]), _ft(last_scan.time[0]))
+            self.notice(scan).warning(
+                "scan time %s precedes previous scan at %s" %
+                (_ft(scan.time[0]), _ft(last_scan.time[0])))
             return
 
         step1 = last_scan['pps_step'][0].data
         step2 = scan['pps_step'][0].data
         count1 = last_scan['pps_count'][0].data
         count2 = scan['pps_count'][0].data
-        dsecond = np.timedelta64(1100, 'ms')
+        # dsecond is one second plus a small delta that should account for
+        # normal drift in the labjack clock relative to GPS.  if two samples
+        # differ by more than this, then the successor needs to be adjusted.
+        interval = self.get_interval(last_scan)
+        dsecond = np.timedelta64(1000, 'ms') + interval
 
-        # if not successive scans according to the pps variables, then this is
-        # probably a regular break in the data or a scan with bad values that
-        # will be skipped, so there is nothing to be done.
-        if count2 != count1 + 1 or abs(step2 - step1) > 3:
-            logger.debug("non-contiguous scans from %s to %s",
-                         _ft(last_scan.time[0]), _ft(scan.time[0]))
-            # if the time difference is small and this is not a skip sample,
-            # then that seems like a problem, since that would mean an entire
-            # sample got lost somewhere.
+        # if not successive scans according to the pps variables, or the
+        # sample timestamps are too far apart,then this is probably a regular
+        # break in the data or a scan with bad values that will be skipped, so
+        # there is nothing to be done.  time difference check guards against
+        # the extremely unlikely chance that a break in the data somehow still
+        # has consecutive counts.
+        if count2 != count1 + 1 or time_diff >= 10*dsecond:
+            logger.debug("break in scans from %s (count=%d) to %s (count=%d)",
+                         _ft(last_scan.time[0]), count1,
+                         _ft(scan.time[0]), count2)
+            # conversely, if the time difference is small but the count was
+            # not consecutive, then that seems like a problem worth noting.
             if bool(time_diff <= 3*dsecond and
                     step1 >= 0 and step2 >= 0 and
                     count1 >= 0 and count2 >= 0):
-                self.nwarnings += 1
-                logger.warning("non-contiguous scan at %s with small "
-                               "time difference %s: "
-                               "pps count %d to %d, "
-                               "pps step %d to %d",
-                               _ft(scan.time[0]), time_diff,
-                               count1, count2, step1, step2)
+                self.notice(scan).warning(
+                    "non-contiguous scan at %s with small "
+                    "time difference %s us: pps count %d to %d, "
+                    "pps step %d to %d" %
+                    (_ft(scan.time[0]), td_to_microseconds(time_diff),
+                     count1, count2, step1, step2))
             return
 
-        if time_diff < dsecond:
-            return
+        # if the step changed by more than one, then likely this scan has
+        # dummy values which caused the wrong pps_step to be assigned, so the
+        # pps_step can be adjusted.
+        fix = self.skip_scan(scan)
+        bad_step = None
+        if abs(step2 - step1) > 1 and fix:
+            bad_step = int(step2)
+            step2 = step1
+            scan['pps_step'][0] = step2
 
-        # it's contiguous and more than 1 second after the previous, so
-        # correct it.  not sure if this should count as a warning or not.
+        # since the scan is determined to be contiguous, replace any dummy
+        # values with nans so the scan is not skipped.  do this even if the
+        # times do not need to be corrected.
+
         onesecond = np.timedelta64(1, 's')
-        logger.info("fixing contiguous scan time from %s to %s",
-                    _ft(scan.time[0]), _ft(last_scan.time[0] + onesecond))
-        scan['time'] = last_scan.time + onesecond
-        scan[self.SCAN_DIM] = last_scan[self.SCAN_DIM] + onesecond
-        self.ncorrected += 1
+        if time_diff < (onesecond - interval) or time_diff > dsecond:
+            # it's a contiguous scan but the times are off, so correct them.
+            time0 = scan.time[0]
+            scan['time'] = last_scan.time + onesecond
+            scan[self.SCAN_DIM] = last_scan[self.SCAN_DIM] + onesecond
+            self.notice(scan).time_corrected_from(time0)
+
+        if bad_step is not None:
+            self.notice(scan).warning(
+                f"{_ft(scan.time[0])}: "
+                f"fixed pps_step from {bad_step} to {step2}")
+
+        # now that the scan time has been fixed, log any other notices with
+        # the corrected time.  fill dummy values even if times were not
+        # corrected, since the scan was otherwise determined to be contiguous.
+        if fix:
+            self.fill_scan(scan)
+
+
+
 
     def read_scans(self) -> Generator[xr.Dataset, None, None]:
         """
@@ -433,16 +554,20 @@ adj scan strt: %s
             if scan and period_start is None:
                 period_start = scan.time[0].data
             if scan:
-                logger.debug("handling next scan: %d variables, "
-                             "%d channel samples, at %s",
-                             len(scan.data_vars), len(scan.time),
-                             _ft(scan.time[0]))
+                logger.debug("handling scan %s: %d variables, "
+                             "%d samples/channel, count=%d, step=%d",
+                             _ft(scan.time[0]), len(scan.data_vars),
+                             len(scan.time), scan['pps_count'][0].data,
+                             scan['pps_step'][0].data)
             if scan and not self.sample_rate:
                 self.sample_rate = len(scan.time)
                 logger.debug("set sample rate: %s", self.sample_rate)
 
-            # correct the scan time if it looks wrong, before the other checks
-            self.fix_scan(scan, last_scan)
+            # correct the scan time if it looks wrong, before the other
+            # checks, but only if keep_contiguous is not enabled, in which
+            # case the scan times are being shifted by is_contiguous().
+            if not self.keep_contiguous:
+                self.fix_scan(scan, last_scan)
 
             # now check for a break in the scans
             if scan is None:
@@ -544,8 +669,7 @@ adj scan strt: %s
             # there is no reason any lines except the header should be
             # unmatched, so warn if any are found.
             if "date time" not in line:
-                logger.warning("unmatched line: %s", line.strip())
-                self.nwarnings += 1
+                self.notice().warning("unmatched line: %s" % (line.strip()))
             return None
 
         when = _datetime_from_match(match)
@@ -579,13 +703,10 @@ adj scan strt: %s
         channel = spsid - self.CHANNEL_IDS['ch0']
         name = f"ch{channel}"
         if name not in self.channels:
-            logger.warning("unexpected data for unselected channel: %s", name)
+            self.notice().warning("unexpected data for channel: %s" % (name))
             return None
         step = np.timedelta64(int(1e6/len(y)), 'us')
         x = [when + (i * step) for i in range(0, len(y))]
-        if False and line:
-            logger.debug("from line: %s...; x[0]=%s, x[%d]=%s", line[:30],
-                         x[0].isoformat(), len(x)-1, x[-1].isoformat())
         data = xr.DataArray(y, name=name, coords={'time': x})
         data.encoding['dtype'] = 'float32'
 
