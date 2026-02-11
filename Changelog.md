@@ -2,10 +2,15 @@
 
 ## [unreleased] - Pending changes
 
-`dump_hotfilm.py` now corrects scans with incorrect `pps_step` or sample times
-but which otherwise are contiguous.  It also replaces the dummy values with
-NaNs rather than skipping the entire second of data. See
-[Processing.md](docs/Processing.md) for details.
+
+## [1.4] - 2025-02-11
+
+`dump_hotfilm.py` now corrects scans with incorrect `pps_step`, `pps_count`,
+or sample times but which otherwise can be assumed to be contiguous.  Dummy
+values are replaed with NaNs rather than skipping an entire second of data.
+See [Processing.md](docs/Processing.md) for details.  Related to this, the
+netcdf files now contain a `notices` string variable to identify which scans
+in the output were fixed and any warnings flagged during processing.
 
 The `dump_hotfilm.py` conversion to netcdf now includes the housekeeping
 variables `pps_step` and `pps_count`, since they are necessary to detect
@@ -94,7 +99,8 @@ latency.  Timestamp synchronization seems to work reliably, but might need
 improvement.
 
 <!-- Versions -->
-[unreleased]: https://github.com/NCAR/hotfilm/compare/v1.3...HEAD
+[unreleased]: https://github.com/NCAR/hotfilm/compare/v1.4...HEAD
+[1.4]: https://github.com/NCAR/hotfilm/releases/tag/v1.4
 [1.3]: https://github.com/NCAR/hotfilm/releases/tag/v1.3
 [1.2]: https://github.com/NCAR/hotfilm/releases/tag/v1.2
 [1.1]: https://github.com/NCAR/hotfilm/releases/tag/v1.1
