@@ -595,8 +595,8 @@ def test_rollover():
     assert ds['pps_count'].data[1] == 0
     assert ds['pps_step'].data[0] == 999
     assert ds['pps_step'].data[1] == 999
-    assert hf.nwarnings() == 0
-    assert len(hf.notices) == 0
+    assert hf.num_warnings() == 0
+    assert hf.num_notices() == 0
 
 
 _rollover_lines = """
@@ -625,17 +625,25 @@ _missing_count_lines = """
 2023-09-20T08:45:34.845500 200, 520       2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.1114854
 """.strip().splitlines()
 
-@pytest.mark.xfail
 def test_missing_count():
     "A missing count value should be filled in, not cause a skip."
     hf = ReadHotfilm()
     hf.select_channels([0])
     hf.line_iterator = iter(_missing_count_lines)
-    ds = hf.get_block()
-    assert ds is not None and len(ds.time) == 5
+    ds = hf.read_next_file_dataset(None)
+    assert ds is not None and len(ds.time) == 40
     assert ds['pps_count'].data[2] == 1228
     assert ds['pps_step'].data[2] == 618
     assert ds['pps_step'].data[3] == 618
-    assert hf.nwarnings() == 1
-    assert len(hf.notices) == 1
-    notice = hf.notices[0]
+    xdata = [2.2863753, np.nan, np.nan, np.nan, np.nan, 2.1795704]
+    assert ds['ch0'].data[21:27] == pytest.approx(xdata, nan_ok=True)
+    when = dt.datetime(2023, 9, 20, 8, 45, 30, 845500)
+    when = np.datetime64(when)
+    for i in range(1, len(ds.time)):
+        assert ds.time.data[i] == when + i * np.timedelta64(125, 'ms')
+    for notice in hf.notices:
+        logger.debug("notice: %s", notice.to_string())
+    assert hf.num_warnings() == 0
+    # 1 notice for the missing count, 3 each for two scans with missing data
+    assert hf.num_notices() == 7
+    assert hf.num_corrected() == 2

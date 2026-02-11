@@ -93,13 +93,17 @@ def main(argv: List[str]):
     else:
         hf.write_text(sys.stdout)
 
-    nwarnings = hf.nwarnings()
+    print(f"{hf.num_notices()} notices:")
+    for notice in hf.get_notices():
+        print(notice.to_string())
+
+    nwarnings = hf.num_warnings()
     logger.log(logging.WARNING if nwarnings else logging.DEBUG,
                f"{nwarnings} warnings.")
     if nwarnings > 0:
         sys.stderr.write(f"{nwarnings} warnings.  "
                          "Check the logs for details.\n")
-    ncorrected = hf.ncorrected()
+    ncorrected = hf.num_corrected()
     logger.log(logging.INFO if ncorrected else logging.DEBUG,
                f"{ncorrected} corrected samples.")
     if ncorrected > 0:

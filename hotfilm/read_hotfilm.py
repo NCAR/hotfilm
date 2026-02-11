@@ -211,10 +211,16 @@ class ReadHotfilm:
         self.notices = []
         self.all_notices = []
 
-    def nwarnings(self):
+    def get_notices(self) -> List[HotfilmDataNotice]:
+        return self.all_notices
+
+    def num_notices(self):
+        return len(self.all_notices)
+
+    def num_warnings(self):
         return sum([n.nwarnings for n in self.all_notices])
 
-    def ncorrected(self):
+    def num_corrected(self):
         return sum([n.ncorrected for n in self.all_notices])
 
     def notice(self, scan: xr.Dataset = None) -> HotfilmDataNotice:
@@ -463,10 +469,12 @@ adj scan strt: %s
         """
         If @p scan is not 1 second after @p last_scan, but otherwise the
         housekeeping diagnostics look good, then adjust the timestamps in @p
-        scan to be exactly 1 second after @p last_scan.  This is to handle the
-        case where the hotfilm software got delayed in reading the system time
-        to match up with the pps_step, and so the pps_step was added to the
-        incorrect second.
+        scan to be exactly 1 second after @p last_scan.  This handles cases
+        where the hotfilm software got delayed in reading the system time to
+        match up with the pps_step, and so the pps_step was added to the
+        incorrect second.  If any one thing needs to be fixed--pps_step,
+        pps_count, fill values, timestamps--then fix everything to be
+        consistent.
 
         This is distinct from is_contiguous() since it only handles shifts of
         seconds and not shifts due to drift.  Also, this algorithm takes
@@ -494,6 +502,26 @@ adj scan strt: %s
         # differ by more than this, then the successor needs to be adjusted.
         interval = self.get_interval(last_scan)
         dsecond = np.timedelta64(1000, 'ms') + interval
+        fix = False
+
+        # time difference within which a successive scan can be considered
+        # contiguous and fixable.
+        close_enough = 3*dsecond
+
+        # from empirical observation of the raw data, it seems safe to assume
+        # that if the count is -9999, but the sample time is still within a
+        # few seconds of the previous, then this is still a consecutive scan.
+        # Fix the count so the step and timestamps can be adjusted according
+        # to the previous scan.  If somehow this is wrong, then the next scan
+        # will flag a warning.
+        if count2 == -9999 and time_diff <= close_enough:
+            fix = True
+            count2 = (count1 + 1) % 65536
+            scan['pps_count'][0] = count2
+            self.notice(scan).notice(
+                "scan %s is missing pps_count, but time difference "
+                "%s us is small, count set to %d" %
+                (_ft(scan.time[0]), td_to_microseconds(time_diff), count2))
 
         # if not successive scans according to the pps variables, or the
         # sample timestamps are too far apart,then this is probably a regular
@@ -501,13 +529,16 @@ adj scan strt: %s
         # there is nothing to be done.  time difference check guards against
         # the extremely unlikely chance that a break in the data somehow still
         # has consecutive counts.
-        if (count1 + 1) % 65536 != count2 or time_diff >= 10*dsecond:
+        if (count1 + 1) % 65536 != count2 or time_diff > close_enough:
+            # perhaps this is a good place to add a notice, and perhaps for
+            # both last scan and this one in case they end up in different
+            # files, to give an explanation on both sides of the gap...
             logger.debug("break in scans from %s (count=%d) to %s (count=%d)",
                          _ft(last_scan.time[0]), count1,
                          _ft(scan.time[0]), count2)
             # conversely, if the time difference is small but the count was
             # not consecutive, then that seems like a problem worth noting.
-            if bool(time_diff <= 3*dsecond and
+            if bool(time_diff <= close_enough and
                     step1 >= 0 and step2 >= 0 and
                     count1 >= 0 and count2 >= 0):
                 self.notice(scan).warning(
@@ -521,9 +552,16 @@ adj scan strt: %s
         # if the step changed by more than one, then likely this scan has
         # dummy values which caused the wrong pps_step to be assigned, so the
         # pps_step can be adjusted.
-        fix = self.skip_scan(scan)
+        fix = fix or self.skip_scan(scan)
+        onesecond = np.timedelta64(1, 's')
+        fix = fix or time_diff < (onesecond - interval) or time_diff > dsecond
+
+        if not fix:
+            # nothing found in this scan to fix...
+            return
+
         bad_step = None
-        if abs(step2 - step1) > 1 and fix:
+        if abs(step2 - step1) > 1:
             bad_step = int(step2)
             step2 = step1
             scan['pps_step'][0] = step2
@@ -532,24 +570,20 @@ adj scan strt: %s
         # values with nans so the scan is not skipped.  do this even if the
         # times do not need to be corrected.
 
-        onesecond = np.timedelta64(1, 's')
-        if time_diff < (onesecond - interval) or time_diff > dsecond:
-            # it's a contiguous scan but the times are off, so correct them.
-            time0 = scan.time[0]
-            scan['time'] = last_scan.time + onesecond
-            scan[self.SCAN_DIM] = last_scan[self.SCAN_DIM] + onesecond
-            self.notice(scan).time_corrected_from(time0)
+        # it's a contiguous scan but the times are off, so correct them.
+        time0 = scan.time[0]
+        scan['time'] = last_scan.time + onesecond
+        scan[self.SCAN_DIM] = last_scan[self.SCAN_DIM] + onesecond
+        self.notice(scan).time_corrected_from(time0)
 
+        # now that the scan time has been fixed, log any other notices with
+        # the corrected time and fill dummy values.
         if bad_step is not None:
             self.notice(scan).notice(
                 f"{_ft(scan.time[0])}: "
                 f"fixed pps_step from {bad_step} to {step2}")
 
-        # now that the scan time has been fixed, log any other notices with
-        # the corrected time.  fill dummy values even if times were not
-        # corrected, since the scan was otherwise determined to be contiguous.
-        if fix:
-            self.fill_scan(scan)
+        self.fill_scan(scan)
 
     def read_scans(self) -> Generator[xr.Dataset, None, None]:
         """
