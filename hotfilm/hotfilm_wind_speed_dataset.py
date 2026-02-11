@@ -144,7 +144,7 @@ class HotfilmWindSpeedDataset:
         outpath = OutputPath()
         logger.debug("saving dataset:\n%s", self.dataset)
         try:
-            tfile = outpath.start(fspec, self.dataset)
+            tfile = outpath.start(fspec, self.dataset.time.data[0])
             ds = convert_time_coordinate(self.dataset, self.dataset.time)
             cdim = ds.coords[self.CALIBRATION_TIME]
             # microsecond resolution is not needed for calibration time

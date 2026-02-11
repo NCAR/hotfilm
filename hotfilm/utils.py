@@ -19,7 +19,8 @@ def rdatetime(when: np.datetime64, period: np.timedelta64) -> np.datetime64:
     "Round when to the nearest multiple of period."
     when_ns = when.astype('datetime64[ns]')
     period_ns = period.astype('timedelta64[ns]').astype(int)
-    mod = when_ns.astype(int) % period_ns
+    # treat period=0 like period=1ns, avoid warning about 0 division
+    mod = when_ns.astype(int) % period_ns if period_ns else 0
     # compare with zero since period_ns // 2 is zero when period_ns is 1
     if mod < period_ns // 2 or mod == 0:
         when_ns -= mod

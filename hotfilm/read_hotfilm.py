@@ -8,7 +8,7 @@ import subprocess as sp
 import time
 import logging
 
-from typing import Generator, Union
+from typing import Generator, Tuple, Union
 from typing import Optional, List
 
 import numpy as np
@@ -789,7 +789,7 @@ adj scan strt: %s
                     header = data
                     when = data.time.data[0]
                     tformat = time_formatter(self.timeformat, when)
-                    tfile = outpath.start(filespec, data)
+                    tfile = outpath.start(filespec, when)
                     out = open(tfile.name, "w", buffering=32*65536)
                     out.write("time")
                     for c in data.data_vars.keys():
@@ -846,11 +846,12 @@ adj scan strt: %s
         add_history_to_dataset(ds, "dump_hotfilm", self.command_line)
         return ds
 
-    def get_window(self, ds: xr.Dataset):
+    def get_window(self, ds: xr.Dataset) -> Tuple[Optional[np.datetime64],
+                                                  Optional[np.datetime64]]:
         """
         Return the file interval window containing the start of Dataset @p ds.
         """
-        if ds is None or ds.time.size == 0:
+        if ds is None or ds.time.size == 0 or not self.file_interval:
             return None, None
         begin = rdatetime(ds.time[0].data, self.file_interval)
         if begin > ds.time[0].data:
@@ -891,69 +892,88 @@ adj scan strt: %s
         ds = convert_time_coordinate(ds, ds.time_notices, ds.time.data[0])
         return ds
 
+    def read_next_file_dataset(self, ds: xr.Dataset) -> xr.Dataset:
+        """
+        Read the scans that will fill the next file to be written, according
+        to the current file interval, and return them combined into a single
+        Dataset.
+        """
+        # the current file interval being filled
+        begin, end = None, None
+
+        # concatenate blocks in a Dataset and write to netcdf files.
+        scans = [ds] if ds is not None else []
+        ds = None
+        for data in self.read_scans():
+            scans.append(data)
+            if not self.file_interval:
+                continue
+            if begin is None:
+                begin, end = self.get_window(scans[0])
+            if data.time[-1].data >= end:
+                logger.debug("file window passed at %s",
+                             _ft(data.time[-1].data))
+                break
+
+        # done when no data left
+        if not scans or scans[0].time.size == 0:
+            logger.info("finished, no more scans read.")
+            return None
+
+        logger.debug(f"combining {len(scans)} scans into dataset...")
+        ds = combine_datasets(scans, ['time', self.SCAN_DIM])
+
+        # assume less than a second of data left is leftover from a scan
+        # in the previous time window and should not be written. this
+        # allows processing by intervals to work in parallel without
+        # overwriting a file that will be written by a different process.
+        period = self.get_period_end(ds) - ds.time[0].data
+        if period < np.timedelta64(1, 's'):
+            logger.info("finished, less than a second of data left.")
+            return None
+
+        return ds
+
+    def convert_to_netcdf(self, ncds: xr.Dataset) -> xr.Dataset:
+        """
+        Convert the given Dataset to a form suitable for writing to netcdf.
+        This includes adding current notices, converting the time coordinates
+        to microseconds since the first time, and adding attributes to the
+        data variables.
+        """
+        # add notices before the time coordinates are converted
+        ncds = self._add_notices(ncds)
+        self.clear_notices()
+        ncds = self._add_netcdf_attrs(ncds)
+        return ncds
+
     def write_netcdf_file(self, filespec: str):
         """
-        Like write_text_file(), but write to a netcdf file.  Create a time
+        Like write_text_file(), but write to netcdf files.  Create a time
         coordinate variable using microseconds since the first time, and
         create variables for each channel.
         """
-        outpath = OutputPath()
-        tfile = None
         ds = None
-        # the current file interval being filled
-        begin: np.datetime64 = None
-        end: np.datetime64 = None
+        while (ds := self.read_next_file_dataset(ds)) is not None:
 
-        while True:
-            # concatenate blocks in a Dataset and write to netcdf files.
-            scans = [ds] if ds is not None else []
-            ds = None
-            for data in self.read_scans():
-                scans.append(data)
-                if not self.file_interval:
-                    continue
-                if begin is None:
-                    begin, end = self.get_window(data)
-                if data.time[-1].data >= end:
-                    logger.debug("file window passed at %s",
-                                 _ft(data.time[-1].data))
-                    break
-
-            # done when no data left
-            if not scans or scans[0].time.size == 0:
-                logger.info("finished, no more scans read.")
-                break
-
-            logger.debug(f"combining {len(scans)} scans into dataset...")
-            ds = combine_datasets(scans, ['time', self.SCAN_DIM])
-
-            # assume less than a second of data left is leftover from a scan
-            # in the previous time window and should not be written. this
-            # allows processing by intervals to work in parallel without
-            # overwriting a file that will be written by a different process.
-            period = self.get_period_end(ds) - ds.time[0].data
-            if period < np.timedelta64(1, 's'):
-                logger.info("finished, less than a second of data left.")
-                break
+            period = None
+            begin, end = self.get_window(ds)
+            # save file start time before coordinates are converted
+            starttime = ds.time[0].data
 
             # if file intervals not active, then write the entire dataset,
             # otherwise write the data within the current interval
-            tfile = outpath.start(filespec, ds)
             # get length in minutes before time coordinate is converted,
             if begin is None:
+                period = self.get_period_end(ds) - ds.time[0].data
                 ncds = ds
                 ds = None
             else:
-                # length is not useful on fixed file intervals.
-                period = None
                 ncds, ds = split_dataset(ds, ['time', self.SCAN_DIM], end)
 
-            # add notices before the time coordinates are converted
-            ncds = self._add_notices(ncds)
-            self.clear_notices()
-            ncds = self._add_netcdf_attrs(ncds)
+            ncds = self.convert_to_netcdf(ncds)
+            outpath = OutputPath()
+            tfile = outpath.start(filespec, starttime)
             ncds.to_netcdf(tfile.name, engine='netcdf4', format='NETCDF4')
             # for file intervals, rename to the interval start
             outpath.finish(period, begin)
-            # advance file window or reset it according to remaining data
-            begin, end = self.get_window(ds)

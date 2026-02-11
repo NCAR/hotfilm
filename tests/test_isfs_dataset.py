@@ -20,6 +20,7 @@ def test_rdatetime():
     us = np.timedelta64(1, 'us')
     ms = np.timedelta64(1, 'ms')
     s = np.timedelta64(1, 's')
+    zero = np.timedelta64(0, 'ns')
     testdata = [
         ('2023-08-04T16:00:00.016666667', ms, '2023-08-04T16:00:00.017'),
         ('2023-08-04T16:00:00.016666667', us, '2023-08-04T16:00:00.016667'),
@@ -34,6 +35,7 @@ def test_rdatetime():
         when = np.datetime64(when)
         expected = np.datetime64(expected)
         assert rdatetime(when, period) == expected
+        assert rdatetime(when, zero) == when
 
 
 def test_read_winds():

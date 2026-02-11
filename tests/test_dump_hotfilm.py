@@ -113,6 +113,8 @@ def test_get_window():
     assert end > data.time[0]
     assert begin == np.datetime64(dt.datetime(2023, 7, 20, 0, 0, 0, 0))
     assert end == np.datetime64(dt.datetime(2023, 7, 20, 1, 0, 0, 0))
+    hf.file_interval = np.timedelta64(0, 'm')
+    assert hf.get_window(data) == (None, None)
 
 
 _line1 = """
@@ -595,3 +597,45 @@ def test_rollover():
     assert ds['pps_step'].data[1] == 999
     assert hf.nwarnings() == 0
     assert len(hf.notices) == 0
+
+
+_rollover_lines = """
+2023-07-20T01:02:03.0 200, 521   2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.0114854
+2023-07-20T01:02:03.0 200, 501   65535 999
+2023-07-20T01:02:04.0 200, 521   2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.1114854
+2023-07-20T01:02:04.0 200, 501   0 999
+""".strip().splitlines()
+
+
+# data_dump -i /,501 hotfilm_20230920_084530.dat --nodeltat --precision 8 --nolen --timeformat %Y-%m-%dT%H:%M:%S.%6f
+#
+# The sample times and housekeeping values are from the data_dump, the data
+# values are just filled in, with dummy values inserted at the ends and
+# beginning of the samples to correspond with the missing pps_count.
+_missing_count_lines = """
+2023-09-20T08:45:30.845500 200, 501       1226        618          1         98        514     523693
+2023-09-20T08:45:30.845500 200, 520       2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.1114854
+2023-09-20T08:45:31.845500 200, 501       1227        618       1586        296       1511     562063
+2023-09-20T08:45:31.845500 200, 520       2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.1114854
+2023-09-20T08:45:33.132500 200, 501      -9999       3470         29        985        100     990032
+2023-09-20T08:45:33.132500 200, 520      2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   -9999.0   -9999.0
+2023-09-20T08:45:33.753750 200, 501       1229        985          0         57        500     619576
+2023-09-20T08:45:33.753750 200, 520       -9999.0    -9999.0  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.1114854
+2023-09-20T08:45:34.845500 200, 501       1230        618          0         50        490     531054
+2023-09-20T08:45:34.845500 200, 520       2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.1114854
+""".strip().splitlines()
+
+@pytest.mark.xfail
+def test_missing_count():
+    "A missing count value should be filled in, not cause a skip."
+    hf = ReadHotfilm()
+    hf.select_channels([0])
+    hf.line_iterator = iter(_missing_count_lines)
+    ds = hf.get_block()
+    assert ds is not None and len(ds.time) == 5
+    assert ds['pps_count'].data[2] == 1228
+    assert ds['pps_step'].data[2] == 618
+    assert ds['pps_step'].data[3] == 618
+    assert hf.nwarnings() == 1
+    assert len(hf.notices) == 1
+    notice = hf.notices[0]

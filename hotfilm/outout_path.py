@@ -3,7 +3,6 @@ from pathlib import Path
 import tempfile
 import logging
 import pandas as pd
-import xarray as xr
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -17,8 +16,9 @@ class OutputPath:
         self.tfile = None
         self.filespec = None
 
-    def start(self, filespec: str, data: xr.Dataset):
-        when = pd.to_datetime(data.time.data[0])
+    def start(self, filespec: str,
+              starttime: np.datetime64) -> tempfile.NamedTemporaryFile:
+        when = pd.to_datetime(starttime)
         path = Path(when.strftime(filespec))
         tfile = tempfile.NamedTemporaryFile(dir=str(path.parent),
                                             prefix=str(path.name)+'.',
