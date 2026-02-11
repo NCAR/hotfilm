@@ -48,7 +48,8 @@ Usage: $0 [--rawdata DIR] [methods ...] [date ...]
   dump        Convert raw hotfilm data to netCDF
   calibrate   Calibrate hotfilm netcdf against sonics and write wind speed
   stage       Stage sonic data locally
-  dates       Print default dates and exit
+  dates       Print default dates
+  alldates    Print all dates for which there are hotfilm data files
   index       Index output directories for web access and exit
   publish     Link this run output to the web filesystem
   date ...    List of dates to process (YYYYMMDD),
@@ -64,7 +65,7 @@ EOF
 
 
 # Default dates
-get_dates() {
+get_default_dates() {
 cat <<EOF
 20230803
 20230804
@@ -77,6 +78,15 @@ cat <<EOF
 20230921
 20230922
 EOF
+}
+
+
+get_all_dates() {
+    # Get all dates for which there are hotfilm data files, and print them
+    # in YYYYMMDD format.
+    ls ${rawdata}/hotfilm_20??????_*.dat | \
+        sed -n 's/.*hotfilm_\([0-9]\{8\}\)_.*\.dat/\1/p' | \
+        sort -u
 }
 
 
@@ -201,7 +211,11 @@ while [[ $# -gt 0 ]] ; do
             shift
             ;;
         dates)
-            get_dates
+            get_default_dates
+            exit 0
+            ;;
+        alldates)
+            get_all_dates
             exit 0
             ;;
         index)
@@ -242,7 +256,7 @@ if [ $do_dump -eq 0 ] && [ $do_calibrate -eq 0 ] && [ $do_stage -eq 0 ]; then
 fi
 
 if [ -z "$dates" ]; then
-    dates=$(get_dates)
+    dates=$(get_default_dates)
 fi
 
 for day in $dates ; do
