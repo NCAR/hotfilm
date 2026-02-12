@@ -2,6 +2,9 @@
 
 ## [unreleased] - Pending changes
 
+Sometimes time shifts can persist for hours.  For these cases, jump
+corrections are now tracked in one notice per netcdf file, rather than
+hundreds, and jumps are corrected even when they continue across output files.
 
 ## [1.4] - 2025-02-11
 
