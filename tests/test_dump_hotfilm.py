@@ -740,9 +740,18 @@ def test_time_jump_across_outputs():
     ds = xr.decode_cf(ds)
     for i in range(len(ds.time)):
         assert ds.time.data[i] == xlast + (i+1) * interval
+
+    xnotice = "scantime=2023-08-13T02:00:00.697000; ncorrected=2; njumps=2; jump_end=2023-08-13T02:00:01.697000; message=fix scan time 2023-08-13T02:00:02.697000 to 2023-08-13T02:00:01.697000, 2 jumps since 2023-08-13T02:00:00.697000;"
+    assert len(ds['notices']) == 1
+    assert ds['notices'].data[0] == xnotice
+
     assert ds.time_scan_start.data[0] == np.datetime64("2023-08-13T02:00:00.697000")
     assert ds.time_scan_start.data[1] == np.datetime64("2023-08-13T02:00:01.697000")
-    assert hf.num_corrected() == 2
+    for notice in hf.get_notices():
+        logger.debug("notice: %s", notice.to_string())
+    # total number corrected now includes 2 more
+    assert hf.num_corrected() == 3
     notice = hf.get_notices()[-1]
     assert notice._njumps == 2
     assert notice._jump_end == np.datetime64("2023-08-13T02:00:01.697000")
+    assert notice.to_string() == xnotice

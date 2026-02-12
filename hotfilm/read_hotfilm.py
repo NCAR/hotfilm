@@ -211,6 +211,9 @@ class ReadHotfilm:
         self.scan = None
         # cache the start of the next block
         self.next_scan = None
+        # save the generator for yielding scans, so read_scans() can be called
+        # multiple times to resume within the same block.
+        self.scan_generator = None
         # limit output to inside the begin and end times, if set
         self.begin = None
         self.end = None
@@ -658,7 +661,24 @@ adj scan strt: %s
         if fix_missing:
             self.fill_scan(scan)
 
-    def read_scans(self) -> Generator[xr.Dataset, None, None]:
+    def read_scans(self):
+        """
+        read_scans() is a generator which yields blocks of scans, depending on
+        settings like keep_contiguous, minblock, and maxblock.  When a block
+        is finished, it returns None.  If read_scans() is interrupted before
+        returning an entire block, such as to write an output file, then when
+        called again it continues yielding the same block.  It does this by
+        preserving the generator across calls. Once a block generator is
+        exhausted, then it is restarted on the next call.
+        """
+        if self.scan_generator is None:
+            self.scan_generator = self.generate_scans()
+        while ds := next(self.scan_generator, None):
+            yield ds
+        self.scan_generator = None
+        return None
+
+    def generate_scans(self) -> Generator[xr.Dataset, None, None]:
         """
         Yield the minimum time period of scans and the following scans until
         there is a break.  A break happens for any of these reasons:
@@ -670,7 +690,7 @@ adj scan strt: %s
         returned.  If the minimum period is not reached before a break, then
         the search starts over for the next block.
         """
-        logger.debug("starting read_scans()...")
+        logger.debug("starting generate_scans()...")
         self.adjust_time = 0
         # accumulate scans in a list until the minimum period is reached.
         minreached = False
@@ -785,7 +805,7 @@ adj scan strt: %s
                 if minreached or scan is None:
                     break
 
-        logger.debug("read_scans() finished.")
+        logger.debug("generate_scans() finished.")
         return None
 
     def get_block(self) -> Optional[xr.Dataset]:
@@ -1027,7 +1047,7 @@ adj scan strt: %s
             logger.info("finished, no more scans read.")
             return None
 
-        logger.debug(f"combining {len(scans)} scans into dataset...")
+        logger.debug(f"combining {len(scans)} datasets...")
         ds = combine_datasets(scans, ['time', self.SCAN_DIM])
 
         # assume less than a second of data left is leftover from a scan
@@ -1050,6 +1070,11 @@ adj scan strt: %s
         """
         # add notices before the time coordinates are converted
         ncds = self._add_notices(ncds)
+        # this restarts the jump notice for each file, but it might also be
+        # reasonable to preserve the jump notice across files, at least to
+        # track when it first started.  as long as generate_scans() keeps the
+        # last scan across calls, then the jump is detected at the start of
+        # each new file.
         self.clear_notices()
         ncds = self._add_netcdf_attrs(ncds)
         return ncds
