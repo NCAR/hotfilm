@@ -647,3 +647,102 @@ def test_missing_count():
     # 1 notice for the missing count, 3 each for two scans with missing data
     assert hf.num_notices() == 7
     assert hf.num_corrected() == 2
+
+
+# data_dump -i /,501 -i /,521 --precision 8 --timeformat %Y-%m-%dT%H:%M:%S.%6f --nolen --nodeltat hotfilm_20230813_010000.dat | sed -E -e 's/ +/ /g' | cut  --delimiter=" " -f1-11
+_time_jump = """
+2023-08-13T01:01:06.696500 200, 501 7415 607 0 32 486 562987
+2023-08-13T01:01:06.696500 200, 521 2.0670776 2.1700907 2.1966338 2.1710386 2.1640868 2.1267998 2.1425993 2.2165413
+2023-08-13T01:01:07.696500 200, 501 7416 607 0 80 497 571568
+2023-08-13T01:01:07.696500 200, 521 2.0503302 2.0203109 1.984604 1.9669085 1.9602727 1.9242498 1.91319 1.9435252
+2023-08-13T01:01:08.696500 200, 501 7417 607 0 25 490 569163
+2023-08-13T01:01:08.696500 200, 521 2.2108533 2.1783063 2.1950538 2.1741986 2.1331196 2.1460752 2.1144762 2.1236401
+2023-08-13T01:01:10.697000 200, 501 7418 606 33 995 0 559497
+2023-08-13T01:01:10.697000 200, 521 2.0942528 2.087301 2.0860372 2.0730815 2.0648656 2.0970967 2.0993087 2.0718174
+2023-08-13T01:01:11.697000 200, 501 7419 606 0 19 493 -422677
+2023-08-13T01:01:11.697000 200, 521 2.1410196 2.161243 2.1931579 2.1644027 2.2076936 2.2323408 2.2446644 2.2095895
+2023-08-13T01:01:12.697000 200, 501 7420 606 0 67 487 -448151
+2023-08-13T01:01:12.697000 200, 521 2.1413355 2.1321716 2.1508152 2.1504991 2.127116 2.0996246 2.1413355 2.1482873
+""".strip().splitlines()
+
+def test_time_jump():
+    "A good sample that jumps ahead by 2 seconds needs a second subtracted."
+    hf = ReadHotfilm()
+    hf.select_channels([1])
+    hf.line_iterator = iter(_time_jump)
+    ds = hf.read_next_file_dataset(None)
+    assert ds is not None and len(ds.time) == 48
+    assert ds.time.data[0] == np.datetime64("2023-08-13T01:01:06.696500")
+    assert ds.time.data[8] == np.datetime64("2023-08-13T01:01:07.696500")
+    assert ds.time.data[16] == np.datetime64("2023-08-13T01:01:08.696500")
+    assert ds.time.data[24] == np.datetime64("2023-08-13T01:01:09.697000")
+    assert ds.time.data[32] == np.datetime64("2023-08-13T01:01:10.697000")
+    assert ds.time.data[40] == np.datetime64("2023-08-13T01:01:11.697000")
+    assert hf.num_corrected() == 3
+    # but only 1 notice with 3 jumps, ending at the last scan
+    assert hf.num_notices() == 1
+    notice = hf.get_notices()[0]
+    assert notice._scantime == np.datetime64("2023-08-13T01:01:09.697000")
+    assert notice._njumps == 3
+    assert notice._jump_end == np.datetime64("2023-08-13T01:01:11.697000")
+
+
+_time_jump_across_hour = """
+2023-08-13T01:59:56.696500 200, 501 7415 607 0 32 486 562987
+2023-08-13T01:59:56.696500 200, 521 2.0670776 2.1700907 2.1966338 2.1710386 2.1640868 2.1267998 2.1425993 2.2165413
+2023-08-13T01:59:57.696500 200, 501 7416 607 0 80 497 571568
+2023-08-13T01:59:57.696500 200, 521 2.0503302 2.0203109 1.984604 1.9669085 1.9602727 1.9242498 1.91319 1.9435252
+2023-08-13T01:59:58.696500 200, 501 7417 607 0 25 490 569163
+2023-08-13T01:59:58.696500 200, 521 2.2108533 2.1783063 2.1950538 2.1741986 2.1331196 2.1460752 2.1144762 2.1236401
+2023-08-13T02:00:00.697000 200, 501 7418 606 33 995 0 559497
+2023-08-13T02:00:00.697000 200, 521 2.0942528 2.087301 2.0860372 2.0730815 2.0648656 2.0970967 2.0993087 2.0718174
+2023-08-13T02:00:01.697000 200, 501 7419 606 0 19 493 -422677
+2023-08-13T02:00:01.697000 200, 521 2.1410196 2.161243 2.1931579 2.1644027 2.2076936 2.2323408 2.2446644 2.2095895
+2023-08-13T02:00:02.697000 200, 501 7420 606 0 67 487 -448151
+2023-08-13T02:00:02.697000 200, 521 2.1413355 2.1321716 2.1508152 2.1504991 2.127116 2.0996246 2.1413355 2.1482873
+""".strip().splitlines()
+
+
+def test_time_jump_across_outputs():
+    "Make sure a jump that starts in one file carries into the next."
+    hf = ReadHotfilm()
+    hf.select_channels([1])
+    hf.line_iterator = iter(_time_jump_across_hour)
+    interval = np.timedelta64(125, 'ms')
+    # using the default 60m file interval, the jump should be the last scan in
+    # the first file.
+    ds, ds2 = hf.write_netcdf_file(None)
+    # only first 3 samples of the 4th scan should be in the first file.
+    assert ds is not None
+    assert len(ds.time) == 27
+    assert ds2 is not None
+    assert len(ds2.time) == 5
+    # convert the times back to datetime64
+    ds = xr.decode_cf(ds)
+    assert ds.time.data[0] ==  np.datetime64("2023-08-13T01:59:56.696500")
+    assert ds.time.data[8] ==  np.datetime64("2023-08-13T01:59:57.696500")
+    assert ds.time.data[16] == np.datetime64("2023-08-13T01:59:58.696500")
+    assert ds.time.data[24] == np.datetime64("2023-08-13T01:59:59.697000")
+    xlast = np.datetime64("2023-08-13T01:59:59.697000")
+    xlast += 2 * interval
+    assert ds.time.data[26] == xlast
+    assert hf.num_corrected() == 1
+    notice = hf.get_notices()[-1]
+    assert notice._njumps == 1
+    assert notice._jump_end == np.datetime64("2023-08-13T01:59:59.697000")
+
+    # now get the rest
+    ds, ds2 = hf.write_netcdf_file(None, ds2)
+    assert ds is not None
+    assert len(ds.time) == 48-27
+    assert ds2 is not None
+    assert len(ds2.time) == 0
+    ds = xr.decode_cf(ds)
+    for i in range(len(ds.time)):
+        assert ds.time.data[i] == xlast + (i+1) * interval
+    assert ds.time_scan_start.data[0] == np.datetime64("2023-08-13T02:00:00.697000")
+    assert ds.time_scan_start.data[1] == np.datetime64("2023-08-13T02:00:01.697000")
+    assert hf.num_corrected() == 2
+    notice = hf.get_notices()[-1]
+    assert notice._njumps == 2
+    assert notice._jump_end == np.datetime64("2023-08-13T02:00:01.697000")
