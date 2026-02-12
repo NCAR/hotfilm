@@ -25,7 +25,7 @@ and wind speed:
 > $E_b^2 = a + b * Spd^{{0.45}}$
 
 The coefficient names $a$ and $b$ match the usage in
-https://www.thermopedia.com/content/853/, and they are intenionally
+https://www.thermopedia.com/content/853/, and they are intentionally
 different from the usual linear coefficients of $ax + b$, even though the
 coefficients are calculated from a linear least squares fit.
 
