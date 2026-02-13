@@ -4,10 +4,10 @@ import sys
 import argparse
 import logging
 import numpy as np
-from hotfilm.utils import iso_to_datetime64
 from typing import Optional, List
 
 from hotfilm.read_hotfilm import ReadHotfilm
+import hotfilm.utils as utils
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 def apply_args(hf: ReadHotfilm, argv: Optional[List[str]]):
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("input", nargs="+",
+    parser.add_argument("input", nargs="*",
                         help="1 or more data files, or a sample "
                         "server specifier, like sock:t0t:31000.",
                         default=None)
@@ -55,9 +55,19 @@ def apply_args(hf: ReadHotfilm, argv: Optional[List[str]]):
                         "Use %%s.%%f for "
                         "floating point seconds since epoch.",
                         default=hf.timeformat)
+    parser.add_argument("-v", "--version", action="store_true", dest="version",
+                        help="Print version and exit.")
     parser.add_argument("--log", choices=['debug', 'info', 'error'],
                         default='info')
     args = parser.parse_args(argv)
+
+    if args.version:
+        for key, value in utils.get_version_info().items():
+            print(f"{key}: {value}")
+        sys.exit(0)
+
+    if not args.input:
+        parser.error("No inputs specified.")
 
     if not args.text and not args.netcdf:
         parser.error("Specify output with either --text or --netcdf.")
@@ -69,9 +79,9 @@ def apply_args(hf: ReadHotfilm, argv: Optional[List[str]]):
     hf.set_min_max_block_minutes(args.min, args.max)
     hf.file_interval = np.timedelta64(args.interval, 'm')
     if args.begin:
-        hf.begin = iso_to_datetime64(args.begin)
+        hf.begin = utils.iso_to_datetime64(args.begin)
     if args.end:
-        hf.end = iso_to_datetime64(args.end)
+        hf.end = utils.iso_to_datetime64(args.end)
 
     hf.set_time_format(args.timeformat)
     hf.delay = args.delay

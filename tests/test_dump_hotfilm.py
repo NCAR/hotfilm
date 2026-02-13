@@ -745,6 +745,11 @@ def test_time_jump_across_outputs():
     assert len(ds['notices']) == 1
     assert ds['notices'].data[0] == xnotice
 
+    vinfo = utils.get_version_info()
+    xrv = "%(version)s (%(repo_commit)s)" % (vinfo)
+    assert ds.attrs['repo_version'] == xrv
+    assert ds.attrs['repo_url'] == utils.get_repo_url()
+
     assert ds.time_scan_start.data[0] == np.datetime64("2023-08-13T02:00:00.697000")
     assert ds.time_scan_start.data[1] == np.datetime64("2023-08-13T02:00:01.697000")
     for notice in hf.get_notices():
