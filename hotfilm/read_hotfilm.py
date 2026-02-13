@@ -71,45 +71,68 @@ class HotfilmDataNotice:
     times can still be ordered relative to other notices.
     """
 
+    # the time of the last scan when a jump ended
+    _jump_end: np.datetime64
+
     def __init__(self, scan: xr.Dataset = None):
         """
         @p scan is the scan related to this notice.  It should already have a
         time dimension, so the first time is used as the time of the notice.
         """
-        self.message = None
-        self.scantime = scan.time[0].data if scan is not None else None
-        self.ncorrected = 0
-        self.nfilled = 0
-        self.nskipped = 0
-        self.nwarnings = 0
-        self.fill_ranges = None
+        self._message = None
+        self._scantime = scan.time[0].data if scan is not None else None
+        self._ncorrected = 0
+        self._nfilled = 0
+        self._nskipped = 0
+        self._nwarnings = 0
+        self._njumps = 0
+        self._jump_end = None
+        self._fill_ranges = None
+
+    def scantime(self, when: np.datetime64):
+        self._scantime = when
+        return self
 
     def time_corrected_from(self, old_time: np.datetime64):
-        self.message = "scan time fixed, from %s to %s" % (
-            _ft(old_time), _ft(self.scantime))
-        logger.info(self.message)
-        self.ncorrected += 1
+        self._message = "scan time fixed, from %s to %s" % (
+            _ft(old_time), _ft(self._scantime))
+        logger.info(self._message)
+        self._ncorrected += 1
+        return self
+
+    def time_jump_fixed(self, time0: np.datetime64, timep: np.datetime64):
+        "Accumulate this jump into this notice or start a new jump."
+        # a time jump notice keeps updating the jump range but does not change
+        # _scantime, since that records the first scan in the jump and
+        # determines where the notice is included with the output.
+        self._jump_end = timep
+        self._ncorrected += 1
+        self._njumps += 1
+        self._message = (f"fix scan time {_ft(time0)} to "
+                         f"{_ft(timep)}, {self._njumps} jumps "
+                         f"since {_ft(self._scantime)}")
+        logger.info(self._message)
         return self
 
     def filled_values(self, v: xr.DataArray, nvalues: int,
                       fill_ranges: List[tuple[int, int]]):
-        self.nfilled += nvalues
-        self.fill_ranges = fill_ranges
-        self.message = (
-            f"scan {_ft(self.scantime)}, variable {v.name}[0, {len(v)-1}], "
+        self._nfilled += nvalues
+        self._fill_ranges = fill_ranges
+        self._message = (
+            f"scan {_ft(self._scantime)}, variable {v.name}[0, {len(v)-1}], "
             f"filled {nvalues} nans at indices: {fill_ranges}")
-        logger.info(self.message)
+        logger.info(self._message)
         return self
 
     def warning(self, message: str):
-        self.message = message
+        self._message = message
         logger.warning(message)
-        self.nwarnings += 1
+        self._nwarnings += 1
         return self
 
     def notice(self, message: str):
         "Set a message that is not necessarily a warning, logged as info."
-        self.message = message
+        self._message = message
         logger.info(message)
         return self
 
@@ -120,18 +143,22 @@ class HotfilmDataNotice:
         human readable and hopefully still parseable.
         """
         buffer = ""
-        if self.scantime is not None:
-            buffer += f"scantime={_ft(self.scantime)}; "
-        if self.ncorrected:
-            buffer += f"ncorrected={self.ncorrected}; "
-        if self.nfilled:
-            buffer += f"nfilled={self.nfilled}; "
-        if self.nwarnings:
-            buffer += f"nwarnings={self.nwarnings}; "
-        if self.fill_ranges:
-            buffer += f"fill_ranges={self.fill_ranges}; "
-        if self.message:
-            buffer += f"message={self.message}; "
+        if self._scantime is not None:
+            buffer += f"scantime={_ft(self._scantime)}; "
+        if self._ncorrected:
+            buffer += f"ncorrected={self._ncorrected}; "
+        if self._nfilled:
+            buffer += f"nfilled={self._nfilled}; "
+        if self._nwarnings:
+            buffer += f"nwarnings={self._nwarnings}; "
+        if self._fill_ranges:
+            buffer += f"fill_ranges={self._fill_ranges}; "
+        if self._njumps:
+            buffer += f"njumps={self._njumps}; "
+        if self._jump_end is not None:
+            buffer += f"jump_end={_ft(self._jump_end)}; "
+        if self._message:
+            buffer += f"message={self._message}; "
         return buffer.strip()
 
 
@@ -151,6 +178,8 @@ class ReadHotfilm:
     minblock: np.timedelta64
     maxblock: np.timedelta64
     file_interval: np.timedelta64
+    notices: List[HotfilmDataNotice]
+    all_notices: List[HotfilmDataNotice]
 
     # really these should come from the xml, but hardcode for now
     HEIGHTS = {
@@ -182,6 +211,9 @@ class ReadHotfilm:
         self.scan = None
         # cache the start of the next block
         self.next_scan = None
+        # save the generator for yielding scans, so read_scans() can be called
+        # multiple times to resume within the same block.
+        self.scan_generator = None
         # limit output to inside the begin and end times, if set
         self.begin = None
         self.end = None
@@ -218,10 +250,10 @@ class ReadHotfilm:
         return len(self.all_notices)
 
     def num_warnings(self):
-        return sum([n.nwarnings for n in self.all_notices])
+        return sum([n._nwarnings for n in self.all_notices])
 
     def num_corrected(self):
-        return sum([n.ncorrected for n in self.all_notices])
+        return sum([n._ncorrected for n in self.all_notices])
 
     def notice(self, scan: xr.Dataset = None) -> HotfilmDataNotice:
         """
@@ -235,6 +267,17 @@ class ReadHotfilm:
     def clear_notices(self):
         "Clear the current notices.  Useful after writing out with a Dataset."
         self.notices.clear()
+
+    def time_jump_fixed(self, time0: np.datetime64, timep: np.datetime64):
+        """
+        Create or update a notice for one or more scans fixed for time jumps.
+        """
+        # if this is a new jump notice, create it, otherwise update it.
+        notice = self.notices[-1] if self.notices else None
+        if not notice or not notice._njumps:
+            notice = self.notice().scantime(timep)
+        notice.time_jump_fixed(time0, timep)
+        return notice
 
     def set_command_line(self, argv: List[str]):
         self.command_line = " ".join([f"'{arg}'" if ' ' in arg else arg
@@ -502,7 +545,6 @@ adj scan strt: %s
         # differ by more than this, then the successor needs to be adjusted.
         interval = self.get_interval(last_scan)
         dsecond = np.timedelta64(1000, 'ms') + interval
-        fix = False
 
         # time difference within which a successive scan can be considered
         # contiguous and fixable.
@@ -514,8 +556,9 @@ adj scan strt: %s
         # Fix the count so the step and timestamps can be adjusted according
         # to the previous scan.  If somehow this is wrong, then the next scan
         # will flag a warning.
+        fix_count = False
         if count2 == -9999 and time_diff <= close_enough:
-            fix = True
+            fix_count = True
             count2 = (count1 + 1) % 65536
             scan['pps_count'][0] = count2
             self.notice(scan).notice(
@@ -552,29 +595,61 @@ adj scan strt: %s
         # if the step changed by more than one, then likely this scan has
         # dummy values which caused the wrong pps_step to be assigned, so the
         # pps_step can be adjusted.
-        fix = fix or self.skip_scan(scan)
+        fix_missing = self.skip_scan(scan)
         onesecond = np.timedelta64(1, 's')
-        fix = fix or time_diff < (onesecond - interval) or time_diff > dsecond
+        fix_times = time_diff < (onesecond - interval) or time_diff > dsecond
 
-        if not fix:
+        if not fix_missing and not fix_times and not fix_count:
             # nothing found in this scan to fix...
             return
 
+        # ok, we're fixing this scan, so fix anything that looks wrong,
+        # including pps_step.
         bad_step = None
         if abs(step2 - step1) > 1:
             bad_step = int(step2)
             step2 = step1
             scan['pps_step'][0] = step2
 
-        # since the scan is determined to be contiguous, replace any dummy
-        # values with nans so the scan is not skipped.  do this even if the
-        # times do not need to be corrected.
-
         # it's a contiguous scan but the times are off, so correct them.
+        # however, we have to be careful.  if it's only the times that are
+        # wrong, meaning pps_step and pps_count look good and there are no
+        # missing values, then the times were assigned relative to the wrong
+        # system time and so are off by multiples of seconds.  otherwise, if
+        # we don't know if pps_step was correct, then force the next scan to
+        # be exactly one second after the previous.
+        #
+        # once a jump happens, then all the scans after it likely need to be
+        # fixed also.  probably it's not useful to have a notice for every
+        # fix, so they can be condensed later.
         time0 = scan.time[0]
-        scan['time'] = last_scan.time + onesecond
-        scan[self.SCAN_DIM] = last_scan[self.SCAN_DIM] + onesecond
-        self.notice(scan).time_corrected_from(time0)
+        offset = onesecond
+        jump_times = False
+        if not (fix_missing or fix_count or bad_step is not None):
+            # find the offset which when subtracted is close to one second
+            # after the previous scan.
+            offset = time_diff
+            jump_times = True
+            while offset > dsecond:
+                offset = offset - onesecond
+            if offset < (onesecond - interval):
+                # something is still wrong, force to one second
+                offset = onesecond
+                self.notice().scantime(last_scan.time[0]+offset).warning(
+                    f"scan time {time0} is {td_to_microseconds(time_diff)} us"
+                    " after previous scan, cannot find integral seconds "
+                    "offset for fix, so forcing to 1 second "
+                    "after previous scan.")
+
+        scan['time'] = last_scan.time + offset
+        scan[self.SCAN_DIM] = last_scan[self.SCAN_DIM] + offset
+
+        # the notice depends on whether a time jump is being fixed or a scan
+        # with other wrong values
+        if jump_times:
+            self.time_jump_fixed(time0, scan.time[0].data)
+        else:
+            self.notice(scan).time_corrected_from(time0)
 
         # now that the scan time has been fixed, log any other notices with
         # the corrected time and fill dummy values.
@@ -583,9 +658,27 @@ adj scan strt: %s
                 f"{_ft(scan.time[0])}: "
                 f"fixed pps_step from {bad_step} to {step2}")
 
-        self.fill_scan(scan)
+        if fix_missing:
+            self.fill_scan(scan)
 
-    def read_scans(self) -> Generator[xr.Dataset, None, None]:
+    def read_scans(self):
+        """
+        read_scans() is a generator which yields blocks of scans, depending on
+        settings like keep_contiguous, minblock, and maxblock.  When a block
+        is finished, it returns None.  If read_scans() is interrupted before
+        returning an entire block, such as to write an output file, then when
+        called again it continues yielding the same block.  It does this by
+        preserving the generator across calls. Once a block generator is
+        exhausted, then it is restarted on the next call.
+        """
+        if self.scan_generator is None:
+            self.scan_generator = self.generate_scans()
+        while ds := next(self.scan_generator, None):
+            yield ds
+        self.scan_generator = None
+        return None
+
+    def generate_scans(self) -> Generator[xr.Dataset, None, None]:
         """
         Yield the minimum time period of scans and the following scans until
         there is a break.  A break happens for any of these reasons:
@@ -597,7 +690,7 @@ adj scan strt: %s
         returned.  If the minimum period is not reached before a break, then
         the search starts over for the next block.
         """
-        logger.debug("starting read_scans()...")
+        logger.debug("starting generate_scans()...")
         self.adjust_time = 0
         # accumulate scans in a list until the minimum period is reached.
         minreached = False
@@ -712,7 +805,7 @@ adj scan strt: %s
                 if minreached or scan is None:
                     break
 
-        logger.debug("read_scans() finished.")
+        logger.debug("generate_scans() finished.")
         return None
 
     def get_block(self) -> Optional[xr.Dataset]:
@@ -912,11 +1005,11 @@ adj scan strt: %s
         # written before notices were added or just didn't have any notices.
         if not notices:
             hdn = HotfilmDataNotice()
-            hdn.message = "No notices"
+            hdn._message = "No notices"
             notices = [hdn]
         for notice in notices:
-            if notice.scantime is not None:
-                ctime = notice.scantime
+            if notice._scantime is not None:
+                ctime = notice._scantime
             times.append(ctime)
             messages.append(notice.to_string())
         ds['notices'] = xr.DataArray(messages, name='notices',
@@ -954,7 +1047,7 @@ adj scan strt: %s
             logger.info("finished, no more scans read.")
             return None
 
-        logger.debug(f"combining {len(scans)} scans into dataset...")
+        logger.debug(f"combining {len(scans)} datasets...")
         ds = combine_datasets(scans, ['time', self.SCAN_DIM])
 
         # assume less than a second of data left is leftover from a scan
@@ -977,17 +1070,25 @@ adj scan strt: %s
         """
         # add notices before the time coordinates are converted
         ncds = self._add_notices(ncds)
+        # this restarts the jump notice for each file, but it might also be
+        # reasonable to preserve the jump notice across files, at least to
+        # track when it first started.  as long as generate_scans() keeps the
+        # last scan across calls, then the jump is detected at the start of
+        # each new file.
         self.clear_notices()
         ncds = self._add_netcdf_attrs(ncds)
         return ncds
 
-    def write_netcdf_file(self, filespec: str):
+    def write_netcdf_file(self, filespec: str,
+                          ds: Optional[xr.Dataset] = None) -> (
+            Tuple[Optional[xr.Dataset], Optional[xr.Dataset]]):
         """
         Like write_text_file(), but write to netcdf files.  Create a time
         coordinate variable using microseconds since the first time, and
-        create variables for each channel.
+        create variables for each channel.  If filespec is None, then return
+        tuple with the next Dataset to be written, already converted to netcdf
+        conventions, and any Dataset left over that would not be written.
         """
-        ds = None
         while (ds := self.read_next_file_dataset(ds)) is not None:
 
             period = None
@@ -1006,8 +1107,13 @@ adj scan strt: %s
                 ncds, ds = split_dataset(ds, ['time', self.SCAN_DIM], end)
 
             ncds = self.convert_to_netcdf(ncds)
+
+            if filespec is None:
+                return ncds, ds
             outpath = OutputPath()
             tfile = outpath.start(filespec, starttime)
             ncds.to_netcdf(tfile.name, engine='netcdf4', format='NETCDF4')
             # for file intervals, rename to the interval start
             outpath.finish(period, begin)
+
+        return None, None

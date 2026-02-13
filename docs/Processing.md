@@ -55,7 +55,7 @@ Use `-h` to see the full usage.
 These are known issues related to the data processing, and how problems are
 corrected in the output when possible.
 
-### Time gaps caused by system delays
+### Time shifts caused by system delays
 
 There are cases in the raw data where the hotfilm sample times jump forwards
 and backwards even though there were no interruptions to the data and no
@@ -81,8 +81,14 @@ See [Data-Acquisition.md](Data-Acquisition.md) for details. The scans are
 contiguous because the PPS counter is consecutive, and there are no fill
 values (-9999) in the data.
 
-When these cases are detected, the hotfilm sample times are corrected to be
-exactly 1 second after the previous sample.
+Raw hotfilm sample times were sometimes shifted by whole seconds when the
+wrong system time was used to derive the PPS time, and this shift could
+persist for hours.  These jump corrections are tracked in one notice per
+netcdf file.  Since the `pps_count` and `pps_step` are correct and there are
+no missing values, the times are corrected by whole seconds without changing
+the offset within the second.  This is unlike the missing value corrections,
+which must force a 1-second offset from the previous scan because the
+`pps_step` is uncertain and thus the relative offset is uncertain.
 
 ### Samples with incorrect pps_step
 

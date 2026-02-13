@@ -94,10 +94,12 @@ run_dump() # date
 {
     date="$1"
     echo "Dumping hotfilm data for $date ..."
+    $dumphotfilm --version
     set -x
     mkdir -p ${hotfilm_output}
     $dumphotfilm --netcdf ${hotfilm_output_spec} \
         ${rawdata}/hotfilm_${date}_*.dat
+    set +x
 }
 
 
