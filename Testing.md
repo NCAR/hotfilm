@@ -60,3 +60,10 @@ times with dummy values and replacing them with nans:
 ```
 sensor_extract -i /,501,[2023-09-20T18:15:38,2023-09-20T18:15:42] -i /,520-523,[2023-09-20T18:15:38,2023-09-20T18:15:42] -o hotfilm_20230920_181538.dat hotfilm_20230920_180000.dat 
 ```
+
+More recently, the test data are dumped to text and inserted into the Python
+test code using a command like below:
+
+```
+data_dump -i /,/ --precision 8 --timeformat "%Y-%m-%dT%H:%M:%S.%6f" --nodeltat --nolen channel0_20230828_031030.dat | sed -e 's/  */ /g' | cut --delimiter=' ' -f1-11
+```
