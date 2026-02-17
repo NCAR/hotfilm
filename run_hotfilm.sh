@@ -21,6 +21,7 @@ plot_output=./windspeed/$date/plots
 plot_output_spec=${plot_output}/hotfilm_calibrations_%Y%m%d_%H%M%S.png
 
 webroot=/net/www/docs/isf/projects/M2HATS/isfs
+urlbase=https://archive.eol.ucar.edu/isf/projects/M2HATS/isfs
 
 # if not already on the path, add the default path to the production scripts.
 if ! command -v dump_hotfilm.py >/dev/null 2>&1 ; then
@@ -170,6 +171,7 @@ publish_link() {
     rundate=$(basename $thisdir)
     case "$rundate" in
         hotfilm.20*)
+            echo URL: ${urlbase}/$rundate
             (cd ${webroot} && ln -sf $thisdir .)
             if [ $? -ne 0 ]; then
                 exit 1
