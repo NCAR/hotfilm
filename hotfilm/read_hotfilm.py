@@ -186,6 +186,7 @@ class ReadHotfilm:
     file_interval: np.timedelta64
     notices: List[HotfilmDataNotice]
     all_notices: List[HotfilmDataNotice]
+    dataset_version: Optional[str]
 
     # really these should come from the xml, but hardcode for now
     HEIGHTS = {
@@ -248,6 +249,7 @@ class ReadHotfilm:
         # across all datasets to report at the end.
         self.notices = []
         self.all_notices = []
+        self.dataset_version = None
 
     def get_notices(self, notices=None) -> List[HotfilmDataNotice]:
         return self.all_notices if notices is None else notices
@@ -998,6 +1000,8 @@ adj scan strt: %s
             var.attrs['units'] = '1'
             var.attrs['long_name'] = 'Index of PPS count change'
 
+        if self.dataset_version:
+            ds.attrs['dataset_version'] = self.dataset_version
         add_history_to_dataset(ds, "dump_hotfilm", self.command_line)
         return ds
 

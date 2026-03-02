@@ -23,6 +23,9 @@ plot_output_spec=${plot_output}/hotfilm_calibrations_%Y%m%d_%H%M%S.png
 webroot=/net/www/docs/isf/projects/M2HATS/isfs
 urlbase=https://archive.eol.ucar.edu/isf/projects/M2HATS/isfs
 
+# dataset id or version corresponding to the name of the output directory
+dataset_version=
+
 # if not already on the path, add the default path to the production scripts.
 if ! command -v dump_hotfilm.py >/dev/null 2>&1 ; then
     export PATH="${hotfilmdir}:${PATH}"
@@ -39,7 +42,7 @@ dates=""
 
 usage() {
     cat <<EOF
-Usage: $0 [--rawdata DIR] [methods ...] [date ...]
+Usage: $0 [--rawdata DIR] [methods ...] {all|default|date ...}
 
   setup       Print bash command to add hotfilm directory to PATH.
               Use it like this: eval \$(path/to/run_hotfilm.sh setup)
@@ -53,8 +56,8 @@ Usage: $0 [--rawdata DIR] [methods ...] [date ...]
   alldates    Print all dates for which there are hotfilm data files
   index       Index output directories for web access and exit
   publish     Link this run output to the web filesystem
-  date ...    List of dates to process (YYYYMMDD),
-              otherwise process default dates.
+  date ...    List of dates to process (YYYYMMDD), or 'all', or 'default'
+              to process default dates.
   --rawdata DIR
               Use DIR as the location of the raw hotfilm data files, instead
               of the default $rawdata.
@@ -91,14 +94,33 @@ get_all_dates() {
 }
 
 
+get_dataset_version() {
+    # expect the dataset version to be the name of the current directory, in a
+    # form hotfilm.YYYYmmdd.
+    thisdir=$(realpath .)
+    dataset=$(basename $thisdir)
+    case "$dataset" in
+        hotfilm.20*)
+            dataset_version=$dataset
+            ;;
+    esac
+    if [ -z "$dataset_version" ]; then
+        echo "Unexpected dataset version from directory: $thisdir"
+        exit 1
+    fi
+}
+
+
 run_dump() # date
 {
+    get_dataset_version
     date="$1"
     echo "Dumping hotfilm data for $date ..."
     $dumphotfilm --version
     set -x
     mkdir -p ${hotfilm_output}
     $dumphotfilm --netcdf ${hotfilm_output_spec} \
+        --dataset-version "$dataset_version" \
         ${rawdata}/hotfilm_${date}_*.dat
     set +x
 }
@@ -145,14 +167,15 @@ run_date() # date
     date="$1"
     echo "Running date: $date"
     if [ $do_dump -ne 0 ] ; then
-        run_dump $date
+        run_dump $date >& dump.${day}.log &
     fi
     if [ $do_stage -ne 0 ] ; then
-        stage_sonic_data $date
+        stage_sonic_data $date >& stage.${day}.log &
     fi
     if [ $do_calibrate -ne 0 ] ; then
-        run_calibrate $date
+        run_calibrate $date >& calibrate.${day}.log &
     fi
+    echo "Done running date: $date"
 }
 
 
@@ -167,23 +190,15 @@ index_dirs() {
 
 publish_link() {
     # Expect to be run from the output directory.
+    get_dataset_version
+    echo "URL: ${urlbase}/$dataset_version"
     thisdir=$(realpath .)
-    rundate=$(basename $thisdir)
-    case "$rundate" in
-        hotfilm.20*)
-            echo URL: ${urlbase}/$rundate
-            (cd ${webroot} && ln -sf $thisdir .)
-            if [ $? -ne 0 ]; then
-                exit 1
-            fi
-            echo Link created:
-            ls -laF ${webroot}/$rundate
-            ;;
-        *)
-            echo "Unexpected directory name: $rundate"
-            exit 1
-            ;;
-    esac
+    (cd ${webroot} && ln -sf $thisdir .)
+    if [ $? -ne 0 ]; then
+        exit 1
+    fi
+    echo "Link created:"
+    ls -laF ${webroot}/$dataset_version
 }
 
 
@@ -238,6 +253,14 @@ while [[ $# -gt 0 ]] ; do
             usage
             exit 0
             ;;
+        all)
+            dates=$(get_all_dates)
+            shift
+            ;;
+        default)
+            dates=$(get_default_dates)
+            shift
+            ;;
         20*)
             if [[ -z "$dates" ]] ; then
                 dates="$1"
@@ -260,11 +283,12 @@ if [ $do_dump -eq 0 ] && [ $do_calibrate -eq 0 ] && [ $do_stage -eq 0 ]; then
 fi
 
 if [ -z "$dates" ]; then
-    dates=$(get_default_dates)
+    usage
+    exit 1
 fi
 
 for day in $dates ; do
-    run_date $day >& run_hotfilm.${day}.log &
+    run_date $day
 done
 
 wait

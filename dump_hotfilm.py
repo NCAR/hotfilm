@@ -50,6 +50,9 @@ def apply_args(hf: ReadHotfilm, argv: Optional[List[str]]):
     parser.add_argument("--text", help="Write data in text columns to file.  "
                         "Filenames can include time specifiers, "
                         "like %%Y%%m%%d_%%H%%M%%S.")
+    parser.add_argument("--dataset-version",
+                        help="Set the dataset version string, added to "
+                        "netcdf global attribute dataset_version.")
     parser.add_argument("--timeformat",
                         help="Timestamp format, iso or %% spec pattern.  "
                         "Use %%s.%%f for "
@@ -86,6 +89,9 @@ def apply_args(hf: ReadHotfilm, argv: Optional[List[str]]):
     hf.set_time_format(args.timeformat)
     hf.delay = args.delay
     hf.keep_contiguous = args.keep_contiguous
+    # not sure if there should be a default, or if it should be required. for
+    # starters, just set it if provided.
+    hf.dataset_version = args.dataset_version
     return args
 
 
