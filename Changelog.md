@@ -2,6 +2,14 @@
 
 ## [unreleased] - Pending changes
 
+Since the `pps_step` is scanned at the same rate as the channels, any shift
+forwards in the `pps_step` caused a succeeding sample to shift backwards in
+time by a whole interval, starting at the same time as the last sample ended,
+when really the drift is much slower than that.  It seems impractical to try
+to correct for the drift over long time periods, so instead the sample times
+are shifted by half an interval.  In normal drift, when `pps_step` only moves
+by one, this is enough to keep the times monotonically increasing.
+
 Sometimes time shifts can persist for hours.  For these cases, jump
 corrections are now tracked in one notice per netcdf file, rather than
 hundreds, and jumps are corrected even when they continue across output files.
