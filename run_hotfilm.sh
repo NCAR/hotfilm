@@ -167,13 +167,13 @@ run_date() # date
     date="$1"
     echo "Running date: $date"
     if [ $do_dump -ne 0 ] ; then
-        run_dump $date >& dump.${day}.log &
+        run_dump $date >& dump.${day}.log
     fi
     if [ $do_stage -ne 0 ] ; then
-        stage_sonic_data $date >& stage.${day}.log &
+        stage_sonic_data $date >& stage.${day}.log
     fi
     if [ $do_calibrate -ne 0 ] ; then
-        run_calibrate $date >& calibrate.${day}.log &
+        run_calibrate $date >& calibrate.${day}.log
     fi
     echo "Done running date: $date"
 }
@@ -288,7 +288,7 @@ if [ -z "$dates" ]; then
 fi
 
 for day in $dates ; do
-    run_date $day
+    run_date $day &
 done
 
 wait
