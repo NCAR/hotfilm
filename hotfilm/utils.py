@@ -81,7 +81,10 @@ def convert_time_coordinate(ds: xr.Dataset, dt: xr.DataArray,
         raise ValueError(f"unknown time unit: {ustep}")
     vtime = np.array([convert(t) for t in (dt - base).data],
                      dtype='int64')
-    ds = ds.assign_coords({dt.name: vtime})
+    if dt.name in ds.coords:
+        ds = ds.assign_coords({dt.name: vtime})
+    else:
+        ds[dt.name] = xr.DataArray(vtime, name=dt.name, dims=dt.dims)
     ds[dt.name].attrs.update(dt.attrs)
     ds[dt.name].attrs['units'] = units
     ds[dt.name].encoding = {'dtype': 'int64'}
