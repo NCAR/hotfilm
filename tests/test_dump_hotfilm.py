@@ -352,14 +352,18 @@ def compare_netcdf(xout: Path, xbase: Path,
     The expected baseline output is at @p xbase, and the test output is at
     @p xout.
     """
+    logger.info("comparing output %s to baseline %s, from %s to %s",
+                xout, xbase, begin, end)
     assert xout.exists() and xout.stat().st_size > 0
     # make sure we get permissions ugo=r also
     assert xout.stat().st_mode & 0o444 == 0o444
-    tds = xr.open_dataset(xout)
     # make sure the time dimension is increasing
+    xds = xr.open_dataset(xbase)
+    assert np.all(np.diff(xds.time.data) > np.timedelta64(0, 'us')), \
+        "baseline time dimension is not strictly increasing: " + str(xout)
+    tds = xr.open_dataset(xout)
     assert np.all(np.diff(tds.time.data) > np.timedelta64(0, 'us')), \
         "time dimension is not strictly increasing: " + str(xout)
-    xds = xr.open_dataset(xbase)
     if begin and end:
         # can't really compare notices this way, since each file will have at
         # least one notice, so delete them first.
@@ -389,6 +393,16 @@ def compare_netcdf(xout: Path, xbase: Path,
     if tds.identical(xds):
         # record the test, knowing that it passed and no comparison needed
         assert True, f"netcdf datasets {xbase} and {xout} are identical"
+        return
+
+    if begin and end:
+        # nc_compare is not likely to be useful here.
+        xnames = list(xds.data_vars.keys()) + list(xds.coords.keys())
+        tnames = list(tds.data_vars.keys()) + list(tds.coords.keys())
+        for var in xnames:
+            assert var in tnames, f"{var} missing from {xout}"
+            assert xds[var].equals(tds[var]), \
+                f"{var} differs between {xbase} and {xout}"
         return
     # the identical() method does not show the differences, so use nc_compare
     # for that.  hardcode the path for now, but might need to be configurable.
@@ -670,19 +684,23 @@ def test_time_jump():
     hf = ReadHotfilm()
     hf.select_channels([1])
     hf.line_iterator = iter(_time_jump)
+    interval = np.timedelta64(125000, 'us')
     ds = hf.read_next_file_dataset(None)
     assert ds is not None and len(ds.time) == 48
     assert ds.time.data[0] == np.datetime64("2023-08-13T01:01:06.696500")
     assert ds.time.data[8] == np.datetime64("2023-08-13T01:01:07.696500")
     assert ds.time.data[16] == np.datetime64("2023-08-13T01:01:08.696500")
-    assert ds.time.data[24] == np.datetime64("2023-08-13T01:01:09.697000")
+    # shift time to account for pps_step change
+    assert ds.time.data[24] == np.datetime64("2023-08-13T01:01:09.697000") - interval // 2
     assert ds.time.data[32] == np.datetime64("2023-08-13T01:01:10.697000")
     assert ds.time.data[40] == np.datetime64("2023-08-13T01:01:11.697000")
-    assert hf.num_corrected() == 3
+    for notice in hf.get_notices():
+        logger.debug("notice: %s", notice.to_string())
+    assert hf.num_corrected() == 4
     # but only 1 notice with 3 jumps, ending at the last scan
-    assert hf.num_notices() == 1
-    notice = hf.get_notices()[0]
-    assert notice._scantime == np.datetime64("2023-08-13T01:01:09.697000")
+    assert hf.num_notices() == 2
+    notice = hf.get_notices()[-1]
+    assert notice._scantime == np.datetime64("2023-08-13T01:01:09.634500")
     assert notice._njumps == 3
     assert notice._jump_end == np.datetime64("2023-08-13T01:01:11.697000")
 
@@ -708,7 +726,7 @@ def test_time_jump_across_outputs():
     hf = ReadHotfilm()
     hf.select_channels([1])
     hf.line_iterator = iter(_time_jump_across_hour)
-    interval = np.timedelta64(125, 'ms')
+    interval = np.timedelta64(125000, 'us')
     # using the default 60m file interval, the jump should be the last scan in
     # the first file.
     ds, ds2 = hf.write_netcdf_file(None)
@@ -722,14 +740,15 @@ def test_time_jump_across_outputs():
     assert ds.time.data[0] ==  np.datetime64("2023-08-13T01:59:56.696500")
     assert ds.time.data[8] ==  np.datetime64("2023-08-13T01:59:57.696500")
     assert ds.time.data[16] == np.datetime64("2023-08-13T01:59:58.696500")
-    assert ds.time.data[24] == np.datetime64("2023-08-13T01:59:59.697000")
-    xlast = np.datetime64("2023-08-13T01:59:59.697000")
-    xlast += 2 * interval
-    assert ds.time.data[26] == xlast
-    assert hf.num_corrected() == 1
+    xlast = np.datetime64("2023-08-13T01:59:59.697000") - interval // 2
+    assert ds.time.data[24] == xlast
+    assert ds.time.data[26] == xlast + 2 * interval
+    for notice in hf.get_notices():
+        logger.debug("notice: %s", notice.to_string())
+    assert hf.num_corrected() == 2
     notice = hf.get_notices()[-1]
     assert notice._njumps == 1
-    assert notice._jump_end == np.datetime64("2023-08-13T01:59:59.697000")
+    assert notice._jump_end == xlast
 
     # now get the rest
     ds, ds2 = hf.write_netcdf_file(None, ds2)
@@ -738,8 +757,15 @@ def test_time_jump_across_outputs():
     assert ds2 is not None
     assert len(ds2.time) == 0
     ds = xr.decode_cf(ds)
-    for i in range(len(ds.time)):
-        assert ds.time.data[i] == xlast + (i+1) * interval
+    # first 5 samples are end of the last scan in previous hour, which started
+    # at xlast plus 2 intervals.
+    for i in range(0, 5):
+        print("time", ds.time.data[i], "expected", xlast + (i+3) * interval)
+        assert ds.time.data[i] == xlast + (i+3) * interval
+    xtime = np.datetime64("2023-08-13T02:00:00.697000")
+    for i in range(5, len(ds.time)):
+        print("time", ds.time.data[i], "expected", xtime + (i-5) * interval)
+        assert ds.time.data[i] == xtime + (i-5) * interval
 
     xnotice = "scantime=2023-08-13T02:00:00.697000; ncorrected=2; njumps=2; jump_end=2023-08-13T02:00:01.697000; "
     xnotice += "message=2023-08-13T02:00:02.697000: fixed to 2023-08-13T02:00:01.697000, 2 jumps since 2023-08-13T02:00:00.697000;"
@@ -756,7 +782,7 @@ def test_time_jump_across_outputs():
     for notice in hf.get_notices():
         logger.debug("notice: %s", notice.to_string())
     # total number corrected now includes 2 more
-    assert hf.num_corrected() == 3
+    assert hf.num_corrected() == 4
     notice = hf.get_notices()[-1]
     assert notice._njumps == 2
     assert notice._jump_end == np.datetime64("2023-08-13T02:00:01.697000")
@@ -832,3 +858,39 @@ def test_freewheeling_times():
     for i in range(len(_freewheeling_times) // 2):
         assert ds.time.data[i] == begin + i * interval
     assert hf.num_corrected() == 20
+
+
+_pps_step_shift = ("""
+2023-09-20T04:22:18.859000 200, 501 50970 564 0 93 508 528727
+2023-09-20T04:22:18.859000 200, 522""" + " 1.8439881" * 4000 + """
+2023-09-20T04:22:19.859000 200, 501 50971 564 1 86 508 522794
+2023-09-20T04:22:19.859000 200, 522""" + " 1.8439881" * 4000 + """
+2023-09-20T04:22:20.858750 200, 501 50972 565 0 80 500 528761
+2023-09-20T04:22:20.858750 200, 522""" + " 1.8439881" * 4000 + """
+2023-09-20T04:22:21.858750 200, 501 50973 565 0 73 499 527880
+2023-09-20T04:22:21.858750 200, 522""" + " 1.8439881" * 4000 + """
+""").strip().splitlines()
+
+
+def test_pps_step_shift():
+    """
+    When PPS step naturally shifts by 1, make sure the sample time shifts by
+    half an interval and no times are duplicated.
+    """
+    hf = ReadHotfilm()
+    hf.line_iterator = iter(_pps_step_shift)
+    interval = np.timedelta64(250, 'us')
+    ds, ds2 = hf.write_netcdf_file(None)
+    assert len(ds2.time) == 0
+    ds = xr.decode_cf(ds)
+    sps = 4000
+    assert len(ds.time) == 4 * sps
+    assert np.all(np.diff(ds.time.data) > 0)
+    assert ds.time.data[0] == np.datetime64("2023-09-20T04:22:18.859000")
+    assert ds.time.data[sps] == np.datetime64("2023-09-20T04:22:19.859000")
+    # the entire third sample shifts by half an interval
+    assert ds.time.data[2 * sps] == np.datetime64("2023-09-20T04:22:20.858750") + interval // 2
+    assert ds.time.data[3 * sps - 1] == np.datetime64("2023-09-20T04:22:21.858750") - interval // 2
+    assert ds.time.data[3 * sps] == np.datetime64("2023-09-20T04:22:21.858750")
+    assert hf.num_corrected() == 1
+    assert hf.num_notices() == 1

@@ -99,6 +99,13 @@ class HotfilmDataNotice:
         self._ncorrected += 1
         return self
 
+    def time_shifted_from(self, time0: np.datetime64, step1: int, step2: int):
+        self._message = (f"{_ft(time0)}: pps step shifted from {step1} to "
+                         f"{step2}, time shifted to {_ft(self._scantime)}")
+        logger.info(self._message)
+        self._ncorrected += 1
+        return self
+
     def time_jump_fixed(self, time0: np.datetime64, timep: np.datetime64):
         "Accumulate this jump into this notice or start a new jump."
         # a time jump notice keeps updating the jump range but does not change
@@ -618,7 +625,28 @@ adj scan strt: %s
             # skipped if it has problems
             return self.fix_scan(scan, None)
 
-        # times should be close to one second ahead, otherwise fix them.
+        # any time the step shifts by one, shift half an interval.  this
+        # prevents normal shifts by a single interval from overlapping with
+        # the previous scan, and it is also symmetrical for shifts in the
+        # other direction.
+        step_shift = 0
+        if abs(step2 - step1) == 1:
+            # the time was shifted by the full interval when acquired, so this
+            # backs off the shift by half an interval
+            step_shift = (step2 - step1) * (interval // 2)
+            scan['time'] = scan['time'] + step_shift
+            scan[self.SCAN_DIM] = scan[self.SCAN_DIM] + step_shift
+            logger.debug("last scan ends %s, step shift %d to %d, "
+                         "shift time: %s, new scan start: %s",
+                         _ft(last_scan.time[-1]), step1, step2, step_shift,
+                         _ft(scan.time[0]))
+            self.notice(scan).time_shifted_from(time0, step1, step2)
+            time0 = scan.time[0]
+            time_diff = (time0 - last_scan.time[0]).data
+
+        # times should be close to one second ahead and increasing.  a normal
+        # shift in the PPS step can cause times to overlap, so catch that also
+        # and shift the time by half an interval.
         fix_times = abs(time_diff - onesecond) > interval
 
         # ok, we're fixing this scan, so fix anything that looks wrong,
@@ -631,9 +659,17 @@ adj scan strt: %s
             step2 = step1
             scan['pps_step'][0] = step2
 
+        times_overlap = time0 <= last_scan.time[-1]
+
         if not (fix_missing or fix_times or fix_count) and (bad_step is None):
-            # nothing found in this scan to fix...
-            return True
+            # nothing found in this scan to fix...so if the times still happen
+            # to overlap, then something is really wrong.
+            if times_overlap:
+                self.notice(scan).skipped(
+                    f"{_ft(time0)}: overlaps with previous scan ending at "
+                    f"{_ft(last_scan.time[-1])}, but no problems found "
+                    "which could be corrected.")
+            return not times_overlap
 
         # it's a contiguous scan but the times are off, so correct them.
         # however, we have to be careful.  if it's only the times that are
@@ -660,8 +696,8 @@ adj scan strt: %s
                 # something is still wrong, force to one second
                 offset = onesecond
                 self.notice().scantime(last_scan.time[0]+offset).warning(
-                    f"scan time {time0} is {td_to_microseconds(time_diff)} us"
-                    " after previous scan, cannot find integral seconds "
+                    f"{_ft(time0)} is {td_to_microseconds(time_diff)} us "
+                    "after previous scan, cannot find integral seconds "
                     "offset for fix, so forcing to 1 second "
                     "after previous scan.")
 
