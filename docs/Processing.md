@@ -1,7 +1,8 @@
 # Hot film data processing
 
 These are notes about reading the raw data files and converting them to other
-output formats, possibly with calibrations to wind speed.
+output formats.  Specific information on converting the hotfilm voltages to
+wind speeds is in [Calibration.md](Calibration.md).
 
 ## What is a Scan
 
@@ -18,37 +19,94 @@ Scan is used in two ways in hotfilm data processing:
   must be assembled into a complete 1-second scan of data, where the 1-second
   scan contains all the channels and other housekeeping variables.
 
-## Exporting hotfilm data as text
-
-The script [dump_hotfilm.py](dump_hotfilm.py) can translate NIDAS archive
-files into a column text format using `data_dump`.  Run `dump_hotfilm.py -h`
-to see usage.
-
-This is the command used to export data for M2HATS on `ustar`.  The text files
-have two columns, first column is floating point seconds since the epoch, and
-the second column is channel 1, ie, the hotfilm at the 1m sonic.
-
-```plain
-dump_hotfilm.py --log info --channel 1 --timeformat %s.%f --text text_%Y%m%d_%H%M%S.epoch.txt /data/isfs/projects/M2HATS/raw_data/
-```
-
-The script creates output files of uninterrupted, contiguous scans, by default
-at least 30 minutes and no more than 4 hours.  The min and max limits can be
-adjusted with command-line arguments.
-
-The text files can be compressed afterwards.
-
 ## Exporting to NetCDF
 
-The [dump_hotfilm.py](dump_hotfilm.py) script can also write netcdf using the
-`--netcdf` option.  There are several options available through command-line
-arguments, but the defaults are set according to the production preferences:
+The [dump_hotfilm.py](dump_hotfilm.py) script writes raw hotfilm voltages to
+netCDF using the `--netcdf` option.  There are several options available
+through command-line arguments, but the defaults are set according to the
+production preferences:
 
 - hourly data files named with the exact hour
 - hotfilm times are the best known absolute times, they are not shifted to the
   requested sampling frequency
 
 Use `-h` to see the full usage.
+
+There are several kinds of corrections applied to the raw data when generating
+netCDF.  These are described in the section on [Data Issues](#data-issues).
+
+The voltage variables are named after the respective channels, `ch0` through
+`ch3`, and their variable attributes identify important metadata for each one:
+
+    float ch2(time) ;
+        _FillValue = nan ;
+        units = "V" ;
+        long_name = "ch2 bridge voltage" ;
+        short_name = "Eb.2m.t0" ;
+        site = "t0" ;
+        height = "2m" ;
+        sample_rate_hz = 4000 ;
+
+By default, netcdf files start on hourly intervals, with the start of the hour
+in the filename.  The data in a file may not start on the hour, and there can
+still be gaps in the data within the file.  The gaps are usually caused by
+restarts of the data acquisition program or other interruptions to the data
+from the A/D.  Gaps can be indicated by jumps in the time coordinate or by NaN
+values in the data values.
+
+The netcdf files also contain some additional metadata about the conversion.
+The variable `notices` is a list of messages about significant corrections or
+warnings logged during the conversion, and there are a few global attributes
+which provide total counts of each kind of notice:
+
+- `num_corrections`: the number of 1-second samples with time corrections
+- `num_filled`: the number of missing values replaced with NaNs
+- `num_warnings`: the number of warning messages, indicating periods where the
+  conversion algorithm detected a problem which it could not fix
+- `num_skipped`: the number of entire 1-second samples which were omitted
+  because they were entirely missing values or there was not enough context to
+  correct them
+
+Generally, there should be few files with warnings, and the warnings indicate
+some problematic data which justifiably has been left out.  Other notices
+usually can be safely ignored.  However, they could be useful context if there
+are cases where the converted data seem suspicious.
+
+The rest of the netCDF schema is designed to follow common conventions and be
+as self-explanatory as possible.  There are two time coordinates for data.
+
+### Voltage time coordinate: time
+
+During acquisition, an entire second of scans was collected as a single NIDAS
+_sample_ and assigned a single timestamp.  When converted to netCDF,  the
+voltages within that sample are assigned regularly-spaced timestamps according
+to the sampling frequency, such as 250 microseconds for 4 kHz sampling.  Those
+times for every voltage have the dimension name `time`, and the time
+coordinate variable `time` gives the absolute time reference for each voltage.
+
+Consecutive samples have the same spacing until the ADC clock drifts far
+enough from the GPS PPS that the PPS appears in a different scan.  When those
+shifts happen, the times in the succeeding sample are shifted by _half_ of the
+sampling interval so no successive times overlap.  So in any series of
+contiguous scans, where all of the scans were read continuously from the ADC
+and all the data in scans correspond exactly to the ADC sampling interval,
+there will still be differences between successive netCDF time coordinates
+which do not match the nominal frequency.
+
+If more precise and regular time spacing is required, then it should be
+possible to smooth the time coordinates by interpolating the scan times
+between the first and last time coordinate in the series.
+
+### Sample time coordinate: time_scan_start
+
+There are a few important diagnostic variables which are included in the
+netCDF output but which are associated only with each 1-second sample,
+`pps_step` and `pps_count`.  Their meanings are described in
+[Data-Acquisition.md](Data-Acquisition.md).  They have dimension
+`time_scan_start`, and the times for the start of each scan are in the
+coordinate variable `time_scan_start`.  (Here _scan_ refers to a 1-second scan
+of scans.)  These times will usually coorespond to the sample times in the raw
+NIDAS data, except for those samples whose times had to be corrected.
 
 ## Data issues
 
@@ -123,8 +181,8 @@ samples despite the errant `pps_step`, so it corrects the sample times and
 kept, including the ones with good values, rather than leaving out the entire
 second of data.
 
-Note that only a subset of a buffer can be filled with dummy values.  The ADC
-was scanning at 4 kHz and the code was reading 2000 scans per read, so the
+Note that only a subset of a buffer might be filled with dummy values.  The
+ADC was scanning at 4 kHz and the code was reading 2000 scans per read, so the
 first read had missing values at [1249, 1999], and the second read had missing
 values at [2000, 2694].
 
@@ -144,10 +202,14 @@ include adding a `calendar:standard` attribute, changing `microseconds` to
 `us`, and using options like `ncdump -st -fc`.  `udunits2` parses the units
 strings fine, so perhaps the problem is the `int64` type.
 
-## Calibration
+The `nc_compare` utility developed in EOL _does_ understand the time
+coordinates and can be used to compare hotfilm voltage netcdf files.  Some
+useful information about a single file can be shown by comparing the file to
+itself:
 
-See [Calibration.md](Calibration.md) for details on converting the hotfilm
-voltages to wind speeds.
+```sh
+nc_compare --nans-equal --showtimes --showequal --showindex hotfilm_20230920_010000.nc hotfilm_20230920_010000.nc
+```
 
 ## Production processing
 
@@ -215,3 +277,28 @@ If necessary, steps can be run separately.  See the usage info with `-h` or
 
 The `run_hotfilm.sh` script processes multiple days in parallel, either the
 default set of days or the dates specified on the command line.
+
+## Exporting hotfilm data as text
+
+The script [dump_hotfilm.py](dump_hotfilm.py) can translate NIDAS archive
+files into a column text format using `data_dump`.  Run `dump_hotfilm.py -h`
+to see usage.
+
+This capability has not been maintained and has been used much less than the
+netCDF output, and the original algorithms have since been deprecated.  For
+example, it did prove useful or even sensible to adjust the output timestamps
+to be exactly at the nominal sampling interval, nor to break up the output
+files after a somewhat arbitrary period of contiguous scans.
+
+The command below has been used to export M2HATS data to CSV.  The text files
+have two columns, first column is floating point seconds since the epoch, and
+the second column is channel 1, ie, the hotfilm at the 1m sonic.
+
+```plain
+dump_hotfilm.py --log info --channel 1 --timeformat %s.%f --text text_%Y%m%d_%H%M%S.epoch.txt /data/isfs/projects/M2HATS/raw_data/
+```
+
+The script creates output files of uninterrupted, contiguous scans, by default
+at least 30 minutes and no more than 4 hours.  The min and max limits can be
+adjusted with command-line arguments.  The text files can be compressed
+afterwards.
