@@ -34,15 +34,11 @@ def dt_string(dt: np.datetime64) -> str:
 
 
 def td_to_microseconds(td64: np.timedelta64) -> int:
-    td = pd.to_timedelta(td64)
-    return ((td.days * _seconds_per_day +
-             td.seconds) * _microseconds_per_second +
-            td.microseconds)
+    return int(td64 / np.timedelta64(1, 'us'))
 
 
 def td_to_seconds(td64: np.timedelta64) -> int:
-    td = pd.to_timedelta(td64)
-    return (td.days * _seconds_per_day) + td.seconds
+    return int(td64 / np.timedelta64(1, 's'))
 
 
 def iso_to_datetime64(iso: str) -> np.datetime64:
@@ -233,3 +229,24 @@ def split_dataset(ds: xr.Dataset, dims: list[str],
     ds = ds.isel(**remainder)
     logger.debug("remaining dataset after window removed:\n%s", ds)
     return (ncds, ds)
+
+
+def extract_dataset(ds: xr.Dataset, dims: list[str],
+                    begin: np.datetime64,
+                    end: np.datetime64) -> xr.Dataset:
+    """
+    Return a dataset with time coordinates between @p begin and @p end.
+    This is like split_dataset(), but only returns the window dataset.
+    """
+    window = {}
+    for dim in dims:
+        # need to know at which index the time coordinate exceeds
+        # the window end time
+        ibegin = ds[dim].searchsorted(begin)
+        iend = ds[dim].searchsorted(end)
+        window[dim] = slice(ibegin, iend)
+
+    logger.debug("selecting time window '%s' from dataset:\n%s",
+                 window, ds)
+    ds = ds.isel(**window)
+    return ds

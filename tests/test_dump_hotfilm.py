@@ -85,6 +85,7 @@ def test_microsecond_times():
 def test_get_period():
     hf = ReadHotfilm()
     data = hf.parse_line(_scan, None)
+    assert data is not None
     period = (hf.get_period_end(data) - data.time[0]).data
     interval = hf.get_interval(data)
     assert interval == 125000
@@ -101,6 +102,7 @@ def test_get_window():
     hf = ReadHotfilm()
     assert hf.file_interval == np.timedelta64(60, 'm')
     data = hf.parse_line(_scan, None)
+    assert data is not None
     begin, end = hf.get_window(data)
     assert begin <= data.time[0]
     assert end > data.time[0]
@@ -108,6 +110,7 @@ def test_get_window():
     assert end == np.datetime64(dt.datetime(2023, 7, 20, 2, 0, 0, 0))
     # now test if the first time is closer to the end of the interval
     data = hf.parse_line(_scan_half_hour, None)
+    assert data is not None
     begin, end = hf.get_window(data)
     assert begin <= data.time[0]
     assert end > data.time[0]
@@ -150,11 +153,13 @@ def check_and_append(hf: ReadHotfilm, data: xr.Dataset, next: xr.Dataset,
 def test_is_contiguous():
     hf = ReadHotfilm()
     data = hf.parse_line(_line1, None)
+    assert data is not None
     xfirst = np.datetime64(dt.datetime(2023, 7, 20, 1, 2, 3, 0))
     assert data.time.data[0] == xfirst
     # after the first scan adjust should still be zero.
     assert hf.adjust_time == 0
     next = hf.parse_line(_line2, None)
+    assert next is not None
     xfirst = np.datetime64(dt.datetime(2023, 7, 20, 1, 2, 4, 0))
     assert next.time.data[0] == xfirst
     assert hf.adjust_time == 0
@@ -164,7 +169,7 @@ def test_is_contiguous():
     interval = np.timedelta64(125000, 'us')
     next['time'] = next.time + 2*interval + np.timedelta64(1, 's')
     # still contiguous, but next is shifted back
-    xadjust = -2*interval / np.timedelta64(1, 'us')
+    xadjust = int(-2*interval / np.timedelta64(1, 'us'))
     data = check_and_append(hf, data, next, True, xadjust)
     # if the next scan is exactly a second later, then that is like shifting 2
     # intervals relative to the previous scan, and the overall adjustment from
@@ -231,14 +236,16 @@ _block_lines = """
 def test_get_block():
     hf = ReadHotfilm()
     hf.select_channels([1])
-    hf.minblock = 0
+    hf.set_min_max_block_minutes(0, 0)
     hf.keep_contiguous = True
     hf.line_iterator = iter(_block_lines)
     logger.debug("first get_block() call...")
     ds = hf.get_block()
+    assert ds is not None
     assert len(ds.time) == 24
     logger.debug("second get_block() call...")
     ds = hf.get_block()
+    assert ds is not None
     assert len(ds.time) == 16
 
 
@@ -256,10 +263,11 @@ def test_long_enough_blocks():
     hf = ReadHotfilm()
     hf.keep_contiguous = True
     hf.select_channels([1])
-    hf.minblock = 3
+    hf.set_min_max_block_seconds(3, 0)
     hf.line_iterator = iter(_block_lines)
     logger.debug("first get_block() call...")
     data = hf.get_block()
+    assert data is not None
     logger.debug("data returned: %s", repr(data))
     assert len(data.time) == 24
     logger.debug("second get_block() call...")
@@ -289,7 +297,7 @@ def test_skip_blocks():
     """
     hf = ReadHotfilm()
     hf.select_channels([1])
-    hf.minblock = 1
+    hf.set_min_max_block_seconds(1, 0)
     hf.line_iterator = iter(_skip_lines)
     logger.debug("first get_block() call...")
     ds = hf.get_block()
@@ -331,6 +339,7 @@ def test_td_to_microseconds():
         dt.timedelta(microseconds=1000000001): 1000000001
     }
     for td, xusec in tests.items():
+        td = np.timedelta64(td)
         assert utils.td_to_microseconds(td) == xusec
         assert isinstance(utils.td_to_microseconds(td), int)
 
@@ -518,7 +527,7 @@ def create_lines(when: dt.datetime, nchannels: int, nscans: int,
 
 def test_sample_rate():
     hf = ReadHotfilm()
-    hf.minblock = 0
+    hf.set_min_max_block_minutes(0, 0)
     # create test data with 2 full scans of 4 channels, first at 10 hz and
     # then at 20 hz, and make sure read_scans() breaks between them and sets
     # sample_rate correctly.
@@ -850,6 +859,7 @@ def test_freewheeling_times():
     ds, ds2 = hf.write_netcdf_file(None)
     # only first 3 samples of the 4th scan should be in the first file.
     assert ds is not None
+    assert ds2 is not None
     assert len(ds2.time) == 0
     ds = xr.decode_cf(ds)
     for notice in hf.get_notices():
@@ -881,6 +891,8 @@ def test_pps_step_shift():
     hf.line_iterator = iter(_pps_step_shift)
     interval = np.timedelta64(250, 'us')
     ds, ds2 = hf.write_netcdf_file(None)
+    assert ds is not None
+    assert ds2 is not None
     assert len(ds2.time) == 0
     ds = xr.decode_cf(ds)
     sps = 4000

@@ -57,7 +57,7 @@ def main():
         sys.stderr.write("calibration requires --sonics\n")
         sys.exit(1)
     calfilm.maxcals = args.ncals
-    calfilm.inputs = args.inputs
+    calfilm.set_inputs(args.inputs)
     calfilm.netcdf = args.netcdf
     calfilm.images = args.images
     calfilm.plot = args.plot

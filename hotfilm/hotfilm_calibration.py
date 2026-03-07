@@ -35,19 +35,21 @@ class HotfilmCalibration:
     """
     Create a hot film calibration and manage metadata for it.
     """
-    name: str
-    _num_points: int
-    a: float
-    b: float
+    name: str | None
+    _num_points: int | None
+    a: float | None
+    b: float | None
     mean_interval_seconds: int
     period_seconds: int
-    begin: np.datetime64
-    end: np.datetime64
-    eb: xr.DataArray
-    spd: xr.DataArray
-    u: xr.DataArray
-    v: xr.DataArray
-    rms: float
+    begin: np.datetime64 | None
+    eb: xr.DataArray | None
+    spd: xr.DataArray | None
+    u: xr.DataArray | None
+    v: xr.DataArray | None
+    rms: float | None
+    rsquared_linear: float | None
+    rsquared_speed: float | None
+    standard_error: float | None
 
     def __init__(self):
         self.name = None
@@ -103,7 +105,7 @@ class HotfilmCalibration:
         """
         period = f"{self.mean_interval_seconds}s"
         indexer = {da.dims[0]: period}
-        means = da.resample(**indexer).mean(skipna=True, keep_attrs=True)
+        means = da.resample(indexer=indexer).mean(skipna=True, keep_attrs=True)
         # the speed variable may have a time dimension with the frequency in
         # the name, like time60, while the volts will not, so this gives both
         # of them the same time coordinate name, based only on the averaging
@@ -119,12 +121,12 @@ class HotfilmCalibration:
         """
         Compute a calibration by fitting the voltage to the wind speed.
         """
-        self.name = eb.name
+        self.name = str(eb.name)
         logger.debug("\neb=%s", eb)
         logger.debug("calibrating from %s to %s", begin, end)
         if len(spd) < 2:
             raise Exception(f"too few speed points: {len(spd)}")
-        eb = eb.sel(**{eb.dims[0]: slice(begin, end)})
+        eb = eb.sel(indexers={eb.dims[0]: slice(begin, end)})
         if len(eb) < 2:
             raise Exception(f"too few voltage points: {len(eb)}")
         spd = self.resample_mean(spd)
@@ -226,6 +228,7 @@ class HotfilmCalibration:
         """
         spd = self.spd_sonic
         eb = self.eb
+        assert spd is not None and eb is not None
         logger.debug("plotting calibration curve:\n-->eb=%s\n-->spd=%s",
                      eb, spd)
         logger.debug("a=%s, b=%s", self.a, self.b)

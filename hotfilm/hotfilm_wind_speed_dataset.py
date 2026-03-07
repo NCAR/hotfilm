@@ -101,9 +101,10 @@ class HotfilmWindSpeedDataset:
         Use HotfilmCalibration @p hfc to convert a DataArray @p eb of voltages
         to wind speed and add the wind speed variable to this Dataset.
         """
+        assert hfc.begin is not None
         begin = hfc.begin
         end = hfc.get_end_time(begin)
-        eb = eb.sel(**{eb.dims[0]: slice(begin, end)})
+        eb = eb.sel(indexers={eb.dims[0]: slice(begin, end)})
         spd = hfc.speed(eb)
         # follow isfs naming convention which replaces . with underscore,
         # so 0.5m height is inserted into name as 0_5m
@@ -130,9 +131,9 @@ class HotfilmWindSpeedDataset:
                      if 'mean' in v.name)
         logging.info(f"opened hotfilm speed dataset: {filename}, "
                      "speeds=>%s...%s, cals=>%s...%s, means=>%s...%s",
-                     dt_string(timev[0]), dt_string(timev[-1]),
-                     dt_string(ctime[0]), dt_string(ctime[-1]),
-                     dt_string(mtime[0]), dt_string(mtime[-1]))
+                     dt_string(timev[0].data), dt_string(timev[-1].data),
+                     dt_string(ctime[0].data), dt_string(ctime[-1].data),
+                     dt_string(mtime[0].data), dt_string(mtime[-1].data))
         return self
 
     def save(self, fspec: str):
@@ -152,8 +153,9 @@ class HotfilmWindSpeedDataset:
             # use minutes, and we'd like the units to be consistent regardless
             # of the calibration period.
             set_time_coordinate_units(cdim, 'seconds')
-            cdim = ds.coords[[dim for dim in ds.dims if 'mean' in dim][0]]
-            set_time_coordinate_units(cdim, 'seconds')
+            cdim = next(c for c in ds.coords.values() if 'mean' in c.name)
+            if cdim is not None:
+                set_time_coordinate_units(cdim, 'seconds')
 
             logger.debug("calling to_netcdf() on dataset:\n%s", ds)
             # despite adding encoding attributes to all the variables in the
@@ -189,7 +191,7 @@ class HotfilmWindSpeedDataset:
         """
         # the wind speeds are all the variables which start spdhf
         return [v for v in self.dataset.data_vars.values()
-                if v.name.startswith('spdhf')]
+                if str(v.name).startswith('spdhf')]
 
     def get_calibration(self, begin: np.datetime64,
                         spd: xr.DataArray) -> HotfilmCalibration:
@@ -206,8 +208,8 @@ class HotfilmWindSpeedDataset:
         hfc = HotfilmCalibration()
         hfc.name = name
         loc = {self.CALIBRATION_TIME: begin}
-        hfc.a = self.dataset[f'a_{name}'].sel(**loc).data
-        hfc.b = self.dataset[f'b_{name}'].sel(**loc).data
+        hfc.a = self.dataset[f'a_{name}'].sel(indexers=loc).data
+        hfc.b = self.dataset[f'b_{name}'].sel(indexers=loc).data
 
         # calibration parameters are attached to time coordinate attributes
         ctime = self.dataset[self.CALIBRATION_TIME]
@@ -220,22 +222,24 @@ class HotfilmWindSpeedDataset:
         vars = [v for v in self.dataset.data_vars.values() if
                 v.attrs.get('site') == site and
                 v.attrs.get('height') in [height, height_]]
-        eb = next(v for v in vars if v.name.startswith('ch'))
-        spd = next(v for v in vars if v.name.startswith('spd_'))
+        eb = next(v for v in vars
+                  if str(v.name).startswith('ch'))
+        spd = next(v for v in vars
+                   if str(v.name).startswith('spd_'))
         end = hfc.get_end_time(begin)
         calslice = {eb.dims[0]: slice(begin, end)}
-        eb = eb.sel(**calslice)
-        spd = spd.sel(**calslice)
+        eb = eb.sel(indexers=calslice)
+        spd = spd.sel(indexers=calslice)
         hfc.eb = eb
         hfc.spd_sonic = spd
         if f'npoints_{name}' not in self.dataset.data_vars:
             hfc._num_points = len(eb)
         else:
-            hfc._num_points = self.dataset[f'npoints_{name}'].sel(**loc).data
+            hfc._num_points = self.dataset[f'npoints_{name}'].sel(indexers=loc).data
         if f'rms_{name}' not in self.dataset.data_vars:
             hfc.calculate_rms()
         else:
-            hfc.rms = self.dataset[f'rms_{name}'].sel(**loc).data
+            hfc.rms = self.dataset[f'rms_{name}'].sel(indexers=loc).data
         logger.debug("%d calibration points: eb=%s, spd=%s, "
                      "period_seconds=%s, mean_interval_seconds=%s, "
                      "npoints=%s, rms=%s",

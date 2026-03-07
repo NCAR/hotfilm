@@ -8,8 +8,7 @@ import subprocess as sp
 import time
 import logging
 
-from typing import Generator, Tuple, Union
-from typing import Optional, List
+from typing import IO, Generator, Iterable
 
 import numpy as np
 import pandas as pd
@@ -72,7 +71,7 @@ class HotfilmDataNotice:
     """
 
     # the time of the last scan when a jump ended
-    _jump_end: np.datetime64
+    _jump_end: np.datetime64 | None
 
     def __init__(self, scan: xr.Dataset = None):
         """
@@ -120,7 +119,7 @@ class HotfilmDataNotice:
         return self
 
     def filled_values(self, v: xr.DataArray, nvalues: int,
-                      fill_ranges: List[tuple[int, int]]):
+                      fill_ranges: list[tuple[int, int]]):
         self._nfilled += nvalues
         self._fill_ranges = fill_ranges
         self._message = (
@@ -180,20 +179,21 @@ class ReadHotfilm:
     Read the hotfilm 1-second time series from data_dump.
     """
 
-    cmd: List[str]
+    cmd: list[str]
     adjust_time: int
-    scan: Optional[xr.Dataset]
-    next_scan: Optional[xr.Dataset]
+    scan: xr.Dataset | None
+    next_scan: xr.Dataset | None
     command_line: str
-    begin: Optional[np.datetime64]
-    end: Optional[np.datetime64]
+    begin: np.datetime64 | None
+    end: np.datetime64 | None
     keep_contiguous: bool
     minblock: np.timedelta64
     maxblock: np.timedelta64
     file_interval: np.timedelta64
-    notices: List[HotfilmDataNotice]
-    all_notices: List[HotfilmDataNotice]
-    dataset_version: Optional[str]
+    line_iterator: IO[str] | Iterable[str] | None
+    notices: list[HotfilmDataNotice]
+    all_notices: list[HotfilmDataNotice]
+    dataset_version: str | None
 
     # really these should come from the xml, but hardcode for now
     HEIGHTS = {
@@ -258,7 +258,7 @@ class ReadHotfilm:
         self.all_notices = []
         self.dataset_version = None
 
-    def get_notices(self, notices=None) -> List[HotfilmDataNotice]:
+    def get_notices(self, notices=None) -> list[HotfilmDataNotice]:
         return self.all_notices if notices is None else notices
 
     def num_notices(self, notices=None):
@@ -300,7 +300,7 @@ class ReadHotfilm:
         notice.time_jump_fixed(time0, timep)
         return notice
 
-    def set_command_line(self, argv: List[str]):
+    def set_command_line(self, argv: list[str]):
         self.command_line = " ".join([f"'{arg}'" if ' ' in arg else arg
                                       for arg in argv])
 
@@ -314,9 +314,15 @@ class ReadHotfilm:
         else:
             self.timeformat = fspec
 
+    def set_min_max_block_seconds(self, mmin: int, mmax: int):
+        self.minblock = np.timedelta64(mmin, 's')
+        self.maxblock = np.timedelta64(mmax, 's')
+
     def set_min_max_block_minutes(self, mmin: int, mmax: int):
-        self.minblock = np.timedelta64(mmin, 'm')
-        self.maxblock = np.timedelta64(mmax, 'm')
+        self.set_min_max_block_seconds(mmin * 60, mmax * 60)
+
+    def set_file_interval_minutes(self, minutes: int):
+        self.file_interval = np.timedelta64(minutes, 'm')
 
     def format_time(self, when: np.datetime64):
         "Convenient shortcut, but not optimal."
@@ -346,7 +352,7 @@ class ReadHotfilm:
         self.dd = sp.Popen(self.cmd, stdout=sp.PIPE, text=True)
         self.line_iterator = self.dd.stdout
 
-    def select_channels(self, channels: Union[list[int], None]):
+    def select_channels(self, channels: list[int] | None):
         self.channels = [f"ch{ch}" for ch in channels or []
                          if f"ch{ch}" in self.ALL_CHANNELS]
         if not self.channels:
@@ -354,7 +360,7 @@ class ReadHotfilm:
         logger.debug("selected channels: %s",
                      ",".join(self.channels) if self.channels else "all")
 
-    def get_data(self, scan: xr.Dataset = None) -> Union[xr.DataArray, None]:
+    def get_data(self, scan: xr.Dataset | None = None) -> xr.Dataset | None:
         """
         Return the next selected channel as a DataArray.
         """
@@ -402,15 +408,17 @@ class ReadHotfilm:
                 elif i == end + 1:
                     end = i
                 else:
+                    assert end is not None
                     fill_ranges.append((int(begin), int(end)))
                     begin, end = None, None
             if begin is not None:
+                assert end is not None
                 fill_ranges.append((int(begin), int(end)))
             self.notice(scan).filled_values(v, nvalues, fill_ranges)
 
         return scan
 
-    def get_scan(self) -> Optional[xr.Dataset]:
+    def get_scan(self) -> xr.Dataset | None:
         """
         Return a Dataset with all the channels in a single scan.  A scan is
         all channels with the same timestamp and the same sample rate.
@@ -517,7 +525,7 @@ adj scan strt: %s
         td = ds.time[-1] - ds.time[-2]
         return np.timedelta64(td.data, 'us')
 
-    def get_period_end(self, ds: xr.Dataset) -> np.timedelta64:
+    def get_period_end(self, ds: xr.Dataset) -> np.datetime64:
         """
         Return the end of time period covered by this scan, including the
         interval after the last point.
@@ -529,7 +537,8 @@ adj scan strt: %s
         # underlying timedelta64 type, so use .data.
         return end.data
 
-    def fix_scan(self, scan: xr.Dataset, last_scan: xr.Dataset) -> bool:
+    def fix_scan(self, scan: xr.Dataset,
+                 last_scan: xr.Dataset | None) -> bool:
         """
         If @p scan is not 1 second after @p last_scan, but otherwise the
         housekeeping diagnostics look good, then adjust the timestamps in @p
@@ -760,7 +769,7 @@ adj scan strt: %s
         minreached = False
         scan_list = []
         last_scan = None
-        period_start = None
+        period_start: np.datetime64 | None = None
         period = np.timedelta64(0, 'us')
         # reset sample rate so it will be set by next scan.
         self.sample_rate = 0
@@ -774,7 +783,7 @@ adj scan strt: %s
                 scan = self.get_scan()
             # the scan will either be taken, deferred, or skipped.
             self.next_scan = None
-            take_scan = None
+            take_scan = False
 
             # correct the scan time if it looks wrong, before the other
             # checks, but only if keep_contiguous is not enabled, in which
@@ -820,12 +829,14 @@ adj scan strt: %s
                   not self.is_contiguous(last_scan, scan)):
                 self.next_scan = scan
             else:
-                take_scan = scan
+                take_scan = True
 
             # if the current scan passes the other checks, check the period.
             if take_scan:
+                assert scan is not None
                 if not scan_list and not minreached:
                     logger.info("starting scan block: %s", _ft(scan.time[0]))
+                assert period_start is not None
                 period = self.get_period_end(scan) - period_start
                 period = np.timedelta64(period, 's')
                 if not self.maxblock or period <= self.maxblock:
@@ -833,7 +844,7 @@ adj scan strt: %s
                 else:
                     logger.info("maximum block period %s exceeded at %s",
                                 self.maxblock, _ft(scan.time[0]))
-                    take_scan = None
+                    take_scan = False
                     self.next_scan = scan
 
             last_scan = scan_list[-1] if scan_list else None
@@ -852,7 +863,7 @@ adj scan strt: %s
                     yield onescan
                 scan_list.clear()
 
-            if take_scan is None:
+            if not take_scan:
                 # a block is ending.  if there are still scans in the list,
                 # they were not enough to make a minimum block.
                 if scan_list:
@@ -874,7 +885,7 @@ adj scan strt: %s
         logger.debug("generate_scans() finished.")
         return None
 
-    def get_block(self) -> Optional[xr.Dataset]:
+    def get_block(self) -> xr.Dataset | None:
         """
         Read a block of scans and return them as a single Dataset.
         """
@@ -882,7 +893,7 @@ adj scan strt: %s
             return combine_datasets(scans, ['time', self.SCAN_DIM])
         return None
 
-    def parse_line(self, line, scan: xr.Dataset) -> Union[xr.DataArray, None]:
+    def parse_line(self, line, scan: xr.Dataset | None) -> xr.Dataset | None:
         """
         Parse a line of data_dump output, and either add the data to the given
         scan if it belongs to that scan, or start a new scan and return it.
@@ -911,6 +922,7 @@ adj scan strt: %s
             # start a new scan
             scan = xr.Dataset()
 
+        assert scan is not None  # declare for typing scan cannot be None
         spsid = int(match.group('spsid'))
         if spsid == self.ADC_STATUS_ID:
             y = np.fromstring(match.group('data'), dtype=np.int32, sep=' ')
@@ -974,21 +986,23 @@ adj scan strt: %s
             tfile = None
             header = None
             last = None
+            begin = None
             # Use the same time formatter for each block, to exploit regular
             # interval to format time strings
             tformat = None
             for data in self.read_scans():
                 if header is None:
                     header = data
-                    when = data.time.data[0]
-                    tformat = time_formatter(self.timeformat, when)
-                    tfile = outpath.start(filespec, when)
+                    begin = data.time.data[0]
+                    tformat = time_formatter(self.timeformat, begin)
+                    tfile = outpath.start(filespec, begin)
                     out = open(tfile.name, "w", buffering=32*65536)
                     out.write("time")
                     for c in data.data_vars.keys():
                         out.write(" %s" % (c))
                     out.write("\n")
 
+                assert out is not None and tformat is not None
                 # need precision-1 decimal places since precision includes the
                 # integer digit of voltage.
                 fmt = f" %.{self.precision-1}f"
@@ -1001,9 +1015,11 @@ adj scan strt: %s
                 last = data
 
             if out:
+                # if out was set, then so were last and begin
+                assert last is not None and begin is not None
                 out.close()
                 # insert the file length into the final filename
-                period = self.get_period_end(last) - header.time[0].data
+                period = self.get_period_end(last) - begin
                 outpath.finish(period)
 
             if header is None:
@@ -1016,7 +1032,8 @@ adj scan strt: %s
         ds = convert_time_coordinate(ds, ds.time)
         if self.SCAN_DIM in ds.dims:
             ds = convert_time_coordinate(ds, ds[self.SCAN_DIM])
-        channels = [v for v in ds.data_vars if v.startswith('ch')]
+        channels = [v for v in ds.data_vars.keys()
+                    if isinstance(v, str) and v.startswith('ch')]
         for c in channels:
             # use conventional netcdf and ISFS attributes
             ds[c].attrs['units'] = 'V'
@@ -1041,8 +1058,8 @@ adj scan strt: %s
         add_history_to_dataset(ds, "dump_hotfilm", self.command_line)
         return ds
 
-    def get_window(self, ds: xr.Dataset) -> Tuple[Optional[np.datetime64],
-                                                  Optional[np.datetime64]]:
+    def get_window(self, ds: xr.Dataset | None) -> (
+            tuple[np.datetime64, np.datetime64] | tuple[None, None]):
         """
         Return the file interval window containing the start of Dataset @p ds.
         """
@@ -1097,7 +1114,8 @@ adj scan strt: %s
         ds = convert_time_coordinate(ds, ds.time_notices, ds.time.data[0])
         return ds
 
-    def read_next_file_dataset(self, ds: xr.Dataset) -> xr.Dataset:
+    def read_next_file_dataset(self, ds: xr.Dataset | None) -> (
+            xr.Dataset | None):
         """
         Read the scans that will fill the next file to be written, according
         to the current file interval, and return them combined into a single
@@ -1157,9 +1175,9 @@ adj scan strt: %s
         ncds = self._add_netcdf_attrs(ncds)
         return ncds
 
-    def write_netcdf_file(self, filespec: str,
-                          ds: Optional[xr.Dataset] = None) -> (
-            Tuple[Optional[xr.Dataset], Optional[xr.Dataset]]):
+    def write_netcdf_file(self, filespec: str | None,
+                          ds: xr.Dataset | None = None) -> (
+            tuple[xr.Dataset | None, xr.Dataset | None]):
         """
         Like write_text_file(), but write to netcdf files.  Create a time
         coordinate variable using microseconds since the first time, and
@@ -1182,6 +1200,7 @@ adj scan strt: %s
                 ncds = ds
                 ds = None
             else:
+                assert end is not None
                 ncds, ds = split_dataset(ds, ['time', self.SCAN_DIM], end)
 
             ncds = self.convert_to_netcdf(ncds)

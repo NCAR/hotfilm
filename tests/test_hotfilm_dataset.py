@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 import numpy as np
 import xarray as xr
-import pandas as pd
+import datetime as dt
 import pytest
 
 from hotfilm.hotfilm_dataset import HotfilmDataset
@@ -11,34 +11,49 @@ from hotfilm.hotfilm_calibration import HotfilmCalibration
 from hotfilm.hotfilm_calibration import hotfilm_voltage_to_speed
 from hotfilm.utils import r_squared
 
+from test_dump_hotfilm import create_lines
+from hotfilm.read_hotfilm import ReadHotfilm
+
 logger = logging.getLogger(__name__)
 
 _this_dir = Path(__file__).parent
 _baseline_dir = _this_dir / "baseline"
 
 
+def create_hotfilm_datasets(hf: ReadHotfilm,
+                            when: dt.datetime, nchannels: int, nscans: int,
+                            sample_rate: int):
+    datalines = create_lines(when, nchannels, nscans, sample_rate)
+    hf.line_iterator = iter(datalines)
+    datasets = []
+    ds, ds2 = hf.write_netcdf_file(None)
+    while ds is not None:
+        datasets.append(ds)
+        ds, ds2 = hf.write_netcdf_file(None, ds2)
+    return datasets
+
+
 def test_hotfilm_dataset():
     hfd = HotfilmDataset().open(_baseline_dir /
                                 "channel2_20230804_180000_005.nc")
-    ds = hfd.dataset
+    ds = hfd.load()
     xlen = 5*60*2000
     assert len(ds.time) == xlen
     xfirst = np.datetime64('2023-08-04T18:00:00.804500')
     assert ds.time[0].values == xfirst
     xlast = xfirst + (xlen - 1) * np.timedelta64(500, 'us')
     assert ds.time[-1].values == xlast
-    hfd.dataset.close()
+    hfd.close()
 
 
-def get_times(nseconds: int, ntimes: int) -> pd.DatetimeIndex:
+def get_times(nseconds: int, ntimes: int) -> np.ndarray:
     """
-    Create a time index over a nseconds time period with ntimes points.
+    Create a time array over @p nseconds with @p ntimes points.
     """
     origin = np.datetime64("2023-09-14T12:00:00", "ns")
-    end = origin + np.timedelta64(nseconds, 's')
-    # use ntimes+1 to get ntimes times, since the last point is omitted
-    dtime = pd.date_range(origin, end, periods=ntimes+1, inclusive="left")
-    return dtime
+    interval = np.timedelta64(int(1e9 * nseconds / ntimes), 'ns')
+    times = origin + np.arange(ntimes) * interval
+    return times
 
 
 def get_speeds(volts: xr.DataArray, a: float, b: float) -> xr.DataArray:
@@ -265,6 +280,10 @@ def test_rsquared():
     hfc.calibrate(spd_noisy, volts, dtime[0], dtime[-1])
     plot_calibration(hfc)
     assert hfc.rms == pytest.approx(noise, abs=noise*0.05)
+
+
+
+
 
 
 if __name__ == "__main__":
