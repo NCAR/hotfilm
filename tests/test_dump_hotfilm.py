@@ -12,7 +12,7 @@ import xarray as xr
 import pytest
 
 from hotfilm.read_hotfilm import ReadHotfilm
-from hotfilm.time_formatter import time_formatter
+from hotfilm.hotfilm_dataset import HotfilmDataset
 import hotfilm.utils as utils
 from dump_hotfilm import main
 
@@ -78,7 +78,7 @@ def test_microsecond_times():
     scan = hf.parse_line(_sixp, None)
     assert scan is not None
     xtime = np.datetime64(dt.datetime(2023, 9, 20, 18, 15, 42, 843250))
-    assert scan[hf.SCAN_DIM].data[0] == xtime
+    assert scan[HotfilmDataset.SCAN_DIM].data[0] == xtime
 
 
 def test_get_period():

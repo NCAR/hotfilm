@@ -256,6 +256,8 @@ def extract_dataset(ds: xr.Dataset, dims: list[str],
     """
     window = {}
     for dim in dims:
+        if dim not in ds.coords:
+            continue
         # need to know at which index the time coordinate exceeds
         # the window end time
         ibegin = ds[dim].searchsorted(begin)

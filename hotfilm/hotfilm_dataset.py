@@ -5,6 +5,7 @@ import logging
 import xarray as xr
 import numpy as np
 
+from .utils import combine_datasets, extract_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,8 @@ class HotfilmDataset:
     """
 
     HEIGHTS = {'ch0': '0.5m', 'ch1': '1m', 'ch2': '2m', 'ch3': '4m'}
+    TIME_DIM = 'time'
+    SCAN_DIM = 'time_scan_start'
 
     def __init__(self):
         self.files = []
@@ -50,41 +53,41 @@ class HotfilmDataset:
             return None
         if begin is None:
             begin = self.begin()
+            assert begin
         if end is None:
+            # add a delta since end time is not inclusive
             end = self.end()
+            assert end
+            end += np.timedelta64(1, 'ns')
         logger.info(f"loading hotfilm dataset: {begin} to {end}")
-
-        ds = self.fix_variables(self.files[0])
-        return ds
 
         # extract and merge datasets that overlap with the requested time
         # window.  i'm not sure if the file dataset time coordinates should be
         # converted to np.datetime64 first, or if the time window coordinates
         # should be converted to the file dataset time units.
-        merge = None
+        dims = [self.TIME_DIM, self.SCAN_DIM]
+        merge = []
         for ds in self.files:
-            if begin >= ds['time'][0] and begin <= ds['time'][-1]:
-                 merge = ds.sel(time=slice(begin, end))
+            slice = extract_dataset(ds, dims, begin, end)
+            merge.append(slice)
 
-        self.dataset = xr.open_dataset(filename, engine='netcdf4')
-        self.timev = self.dataset['time']
-        self.timed = self.timev.dims[0]
-        logging.debug(f"Opened hotfilm dataset: {filename}, %s...%s",
-                      self.timev[0], self.timev[-1])
-        return self
+        ds = combine_datasets(merge, dims)
+
+        ds = self.fix_variables(ds)
+        return ds
 
     def fix_variables(self, ds: xr.Dataset) -> xr.Dataset:
         """
         Ensure variables attributes are in the dataset.
         """
         for eb in [v for v in ds.data_vars.values()
-                  if isinstance(v.name, str) and v.name.startswith('ch')]:
+                   if isinstance(v.name, str) and v.name.startswith('ch')]:
             if 'long_name' not in eb.attrs:
                 eb.attrs['long_name'] = f'{eb.name} bridge voltage'
             if 'site' not in eb.attrs:
                 eb.attrs['site'] = 't0'
             if 'height' not in eb.attrs:
-                eb.attrs['height'] = self.HEIGHTS[eb.name]
+                eb.attrs['height'] = self.HEIGHTS[str(eb.name)]
         return ds
 
     def close(self):

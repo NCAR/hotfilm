@@ -27,6 +27,11 @@ from .hotfilm_dataset import HotfilmDataset
 logger = logging.getLogger(__name__)
 
 
+# shorter names for time dimension names taken from HotfilmDataset
+_SCAN_DIM = HotfilmDataset.SCAN_DIM
+_TIME_DIM = HotfilmDataset.TIME_DIM
+
+
 def _ft(dt64):
     return np.datetime_as_string(dt64, unit='us')
 
@@ -211,7 +216,6 @@ class ReadHotfilm:
         'ch3': 523
     }
     ADC_STATUS_ID = 501
-    SCAN_DIM = 'time_scan_start'
 
     def __init__(self):
         self.source = ["sock:192.168.1.220:31000"]
@@ -644,7 +648,7 @@ adj scan strt: %s
             # backs off the shift by half an interval
             step_shift = (step2 - step1) * (interval // 2)
             scan['time'] = scan['time'] + step_shift
-            scan[self.SCAN_DIM] = scan[self.SCAN_DIM] + step_shift
+            scan[_SCAN_DIM] = scan[_SCAN_DIM] + step_shift
             logger.debug("last scan ends %s, step shift %d to %d, "
                          "shift time: %s, new scan start: %s",
                          _ft(last_scan.time[-1]), step1, step2, step_shift,
@@ -710,8 +714,8 @@ adj scan strt: %s
                     "offset for fix, so forcing to 1 second "
                     "after previous scan.")
 
-        scan['time'] = last_scan.time + offset
-        scan[self.SCAN_DIM] = last_scan[self.SCAN_DIM] + offset
+        scan[_TIME_DIM] = last_scan[_TIME_DIM] + offset
+        scan[_SCAN_DIM] = last_scan[_SCAN_DIM] + offset
 
         # the notice depends on whether a time jump is being fixed or a scan
         # with other wrong values
@@ -890,7 +894,7 @@ adj scan strt: %s
         Read a block of scans and return them as a single Dataset.
         """
         if scans := list(self.read_scans()):
-            return combine_datasets(scans, ['time', self.SCAN_DIM])
+            return combine_datasets(scans, [_TIME_DIM, _SCAN_DIM])
         return None
 
     def parse_line(self, line, scan: xr.Dataset | None) -> xr.Dataset | None:
@@ -918,7 +922,7 @@ adj scan strt: %s
 
         if bool(scan is None or
                 'time' in scan.dims and when != scan.time[0] or
-                self.SCAN_DIM in scan.dims and when != scan[self.SCAN_DIM][0]):
+                _SCAN_DIM in scan.dims and when != scan[_SCAN_DIM][0]):
             # start a new scan
             scan = xr.Dataset()
 
@@ -927,11 +931,11 @@ adj scan strt: %s
         if spsid == self.ADC_STATUS_ID:
             y = np.fromstring(match.group('data'), dtype=np.int32, sep=' ')
             pps_count = xr.DataArray(y[0:1], name='pps_count',
-                                     coords={self.SCAN_DIM: [when]})
+                                     coords={_SCAN_DIM: [when]})
             pps_count.encoding['dtype'] = 'int32'
             scan['pps_count'] = pps_count
             pps_step = xr.DataArray(y[1:2], name='pps_step',
-                                    coords={self.SCAN_DIM: [when]})
+                                    coords={_SCAN_DIM: [when]})
             pps_step.encoding['dtype'] = 'int32'
             scan['pps_step'] = pps_step
             return scan
@@ -945,7 +949,7 @@ adj scan strt: %s
             return None
         step = np.timedelta64(int(1e6/len(y)), 'us')
         x = [when + (i * step) for i in range(0, len(y))]
-        data = xr.DataArray(y, name=name, coords={'time': x})
+        data = xr.DataArray(y, name=name, coords={_TIME_DIM: x})
         data.encoding['dtype'] = 'float32'
 
         logger.debug("add %s to %sscan at %s", name,
@@ -953,11 +957,11 @@ adj scan strt: %s
         scan[data.name] = data
 
         # note if the scan rate changed
-        if scan_in and len(scan_in.time) != len(data.time):
+        if scan_in and len(scan_in[_TIME_DIM]) != len(data[_TIME_DIM]):
             logger.debug("scan %s at %s: "
                          "sample rate changed from %d to %d Hz",
                          data.name, _ft(when),
-                         len(scan_in.time), len(data.time))
+                         len(scan_in[_TIME_DIM]), len(data[_TIME_DIM]))
 
         return scan
 
@@ -1029,9 +1033,9 @@ adj scan strt: %s
         """
         Setup time coordinate and data variable attributes for netcdf output.
         """
-        ds = convert_time_coordinate(ds, ds.time)
-        if self.SCAN_DIM in ds.dims:
-            ds = convert_time_coordinate(ds, ds[self.SCAN_DIM])
+        ds = convert_time_coordinate(ds, ds[_TIME_DIM])
+        if _SCAN_DIM in ds.dims:
+            ds = convert_time_coordinate(ds, ds[_SCAN_DIM])
         channels = [v for v in ds.data_vars.keys()
                     if isinstance(v, str) and v.startswith('ch')]
         for c in channels:
@@ -1144,13 +1148,13 @@ adj scan strt: %s
             return None
 
         logger.debug(f"combining {len(scans)} datasets...")
-        ds = combine_datasets(scans, ['time', self.SCAN_DIM])
+        ds = combine_datasets(scans, [_TIME_DIM, _SCAN_DIM])
 
         # assume less than a second of data left is leftover from a scan
         # in the previous time window and should not be written. this
         # allows processing by intervals to work in parallel without
         # overwriting a file that will be written by a different process.
-        period = self.get_period_end(ds) - ds.time[0].data
+        period = self.get_period_end(ds) - ds[_TIME_DIM][0].data
         if period < np.timedelta64(1, 's'):
             logger.info("finished, less than a second of data left.")
             return None
@@ -1190,18 +1194,18 @@ adj scan strt: %s
             period = None
             begin, end = self.get_window(ds)
             # save file start time before coordinates are converted
-            starttime = ds.time[0].data
+            starttime = ds[_TIME_DIM][0].data
 
             # if file intervals not active, then write the entire dataset,
             # otherwise write the data within the current interval
             # get length in minutes before time coordinate is converted,
             if begin is None:
-                period = self.get_period_end(ds) - ds.time[0].data
+                period = self.get_period_end(ds) - ds[_TIME_DIM][0].data
                 ncds = ds
                 ds = None
             else:
                 assert end is not None
-                ncds, ds = split_dataset(ds, ['time', self.SCAN_DIM], end)
+                ncds, ds = split_dataset(ds, [_TIME_DIM, _SCAN_DIM], end)
 
             ncds = self.convert_to_netcdf(ncds)
 
