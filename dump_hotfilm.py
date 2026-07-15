@@ -80,7 +80,7 @@ def apply_args(hf: ReadHotfilm, argv: Optional[List[str]]):
     if args.channels:
         hf.select_channels(args.channels)
     hf.set_min_max_block_minutes(args.min, args.max)
-    hf.file_interval = np.timedelta64(args.interval, 'm')
+    hf.set_file_interval_minutes(args.interval)
     if args.begin:
         hf.begin = utils.iso_to_datetime64(args.begin)
     if args.end:

@@ -3,13 +3,12 @@ import logging
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 
 from hotfilm.isfs_dataset import IsfsDataset
 from hotfilm.hotfilm_dataset import HotfilmDataset
 from hotfilm.hotfilm_wind_speed_dataset import HotfilmWindSpeedDataset
 from hotfilm.hotfilm_calibration import HotfilmCalibration
-from .utils import dt_string
+from .utils import dt_string, to_datetime
 from .utils import add_history_to_dataset
 from .utils import rdatetime
 
@@ -23,6 +22,8 @@ class CalibrateHotfilm:
     sonic datasets and also plotting the calibration results.
     """
 
+    inputs: list[str]
+
     def __init__(self):
         self.calperiod = np.timedelta64(300, 's')
         self.maxcals = 0
@@ -31,11 +32,14 @@ class CalibrateHotfilm:
         self.start = None
         self.finish = None
         self.sonics = None
-        self.inputs = None
+        self.inputs = []
         self.netcdf = 'hotfilm_wind_speed_%Y%m%d_%H%M%S.nc'
         self.images = 'hotfilm_calibrations_%Y%m%d_%H%M%S.png'
         # if true, save calibration plots when generated
         self.plot = False
+
+    def set_inputs(self, inputs: list[str]):
+        self.inputs = inputs
 
     def set_process_window(self, start: str, finish: str):
         """
@@ -52,12 +56,14 @@ class CalibrateHotfilm:
     def calibrate_hotfilm(self, filename: str) -> HotfilmWindSpeedDataset:
         maxcals = self.maxcals
         sonics = self.sonics
+        assert sonics is not None
         calperiod = self.calperiod
-        films = HotfilmDataset().open(filename)
-        logger.debug("\nhotfilm.timev=%s", films.timev)
+        films = HotfilmDataset().open(filename).load()
+        assert films is not None
+        logger.debug("\nhotfilm.timev=%s", films.time)
         # start with first time in hotfilm dataset rounded to cal period.
-        first = films.timev.data[0]
-        last = films.timev.data[-1]
+        first = films.time.data[0]
+        last = films.time.data[-1]
         logger.debug("first=%s, type=%s", first, type(first))
         begin = rdatetime(first, calperiod)
         end = rdatetime(last, calperiod)
@@ -74,9 +80,9 @@ class CalibrateHotfilm:
             if self.finish and begin + calperiod > self.finish:
                 break
             cals = []
-            for ch in films.dataset.data_vars:
-                eb = films.get_variable(ch)
-                logger.debug("\neb=%s", eb)
+            for ch in films.data_vars:
+                eb = films[ch]
+                logger.debug("\ncreating calibration for eb=\n%s", eb)
                 try:
                     hfc = HotfilmCalibration()
                     hfc.calibrate_winds(sonics, eb, begin, calperiod)
@@ -84,8 +90,14 @@ class CalibrateHotfilm:
                     cals.append(hfc)
                     ncals += 1
                 except Exception as e:
-                    logger.error(f"calibration failed for {eb.name} "
-                                 f"at {dt_string(begin)}: {e}")
+                    traceback = getattr(e, "__traceback__", None)
+                    if traceback:
+                        logger.error(f"calibration failed for {eb.name} "
+                                     f"at {dt_string(begin)}: {e}",
+                                     exc_info=traceback)
+                    else:
+                        logger.error(f"calibration failed for {eb.name} "
+                                     f"at {dt_string(begin)}: {e}")
                 if maxcals and ncals >= maxcals:
                     break
             if self.plot:
@@ -131,9 +143,10 @@ class CalibrateHotfilm:
         for hfc in cals + [None]:
             # save previous figure if time has changed or end of list
             if ctime and (not hfc or hfc.begin != ctime):
-                when = pd.to_datetime(ctime)
+                when = to_datetime(ctime)
                 path = when.strftime(filename)
                 logger.info("saving %s", path)
+                assert fig is not None
                 fig.savefig(path)
                 plt.close(fig)
                 ctime = None
