@@ -15,11 +15,11 @@ dependencies = [
     "numpy",
     "netcdf4",
     "matplotlib",
-    "pandas",
-    "bokeh",
-    "pytest"
 ]
 
+[project.optional-dependencies]
+dev = ["pytest"]
+web = ["bokeh"]
 
 [tool.pytest.ini_options]
 testpaths = [

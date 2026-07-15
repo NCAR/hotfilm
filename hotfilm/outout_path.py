@@ -2,7 +2,6 @@
 from pathlib import Path
 import tempfile
 import logging
-import pandas as pd
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -18,7 +17,7 @@ class OutputPath:
 
     def start(self, filespec: str,
               starttime: np.datetime64) -> tempfile.NamedTemporaryFile:
-        when = pd.to_datetime(starttime)
+        when = starttime.astype('datetime64[us]').item()
         path = Path(when.strftime(filespec))
         tfile = tempfile.NamedTemporaryFile(dir=str(path.parent),
                                             prefix=str(path.name)+'.',
@@ -46,8 +45,9 @@ class OutputPath:
         the filename.
         """
         path = self.path
-        if when:
-            path = Path(pd.to_datetime(when).strftime(self.filespec))
+        if when is not None:
+            when_dt = when.astype('datetime64[us]').item()
+            path = Path(when_dt.strftime(self.filespec))
         minutes = None
         if period is not None:
             minutes = np.timedelta64(period, 'm').astype(int)

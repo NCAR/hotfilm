@@ -7,7 +7,6 @@ import logging
 import numpy as np
 import xarray as xr
 import datetime as dt
-import pandas as pd
 
 
 logger = logging.getLogger(__name__)
@@ -37,11 +36,11 @@ class IsfsDataset:
         Return the filename for the given time by formatting the pathspec with
         @p when.
         """
-        dt = pd.to_datetime(when)
-        filepath = Path(dt.strftime(str(self.pathspec)))
+        when_dt = when.astype('datetime64[us]').item()
+        filepath = Path(when_dt.strftime(str(self.pathspec)))
         if not filepath.exists():
             logger.error("File for time %s does not exist: %s",
-                         dt, filepath)
+                         when_dt, filepath)
             return None
         return filepath
 

@@ -11,7 +11,6 @@ import logging
 from typing import IO, Generator, Iterable
 
 import numpy as np
-import pandas as pd
 import xarray as xr
 
 from hotfilm.outout_path import OutputPath
@@ -486,7 +485,7 @@ interval (us): %d
 scan expected: %s
 adj scan strt: %s
  shift (usec): %d""",
-                     pd.to_timedelta((next - xnext).data), self.adjust_time,
+                     (next - xnext).data.item(), self.adjust_time,
                      _ft(ds.time[-1]), interval_usecs, _ft(xnext), _ft(next),
                      shift)
 

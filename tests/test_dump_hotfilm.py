@@ -7,7 +7,6 @@ import contextlib
 from pathlib import Path
 import logging
 import datetime as dt
-import pandas as pd
 import numpy as np
 import xarray as xr
 import pytest
@@ -61,7 +60,7 @@ def test_parse_line():
     assert len(ch1) == 8
     assert len(x) == 8
     assert len(y) == 8
-    when = pd.to_datetime(x[0])
+    when = x[0].astype('datetime64[us]').item()
     assert when.isoformat() == "2023-07-20T01:02:03.395000"
     assert when.strftime("%Y%m%d_%H%M%S") == "20230720_010203"
     assert x[-1] == x[0] + (7 * np.timedelta64(125000, 'us'))
@@ -88,8 +87,8 @@ def test_get_period():
     assert data is not None
     period = (hf.get_period_end(data) - data.time[0]).data
     interval = hf.get_interval(data)
-    assert interval == 125000
-    assert pd.to_timedelta(period).total_seconds() == 1
+    assert interval == np.timedelta64(125000, 'us')
+    assert period == np.timedelta64(1, 's')
 
 
 _scan_half_hour = """
@@ -140,7 +139,7 @@ def check_and_append(hf: ReadHotfilm, data: xr.Dataset, next: xr.Dataset,
                  ft(next.time[0]), ft(next.time[-1]))
     assert hf.is_contiguous(data, next) == xcont
     if xcont:
-        data = xr.merge([data, next])
+        data = xr.merge([data, next], compat="no_conflicts", join="outer")
         logger.debug("after appending next, dataset is: [%s, %s]",
                      ft(data.time[0]), ft(data.time[-1]))
         interval = np.timedelta64(125000, 'us')
@@ -214,7 +213,7 @@ def test_s_format():
     when = np.datetime64(dt.datetime(2023, 8, 8, 18, 6, 37, 0))
     epoch = np.datetime64(dt.datetime(1970, 1, 1))
     assert hf.format_time(when) == "1691517997.000000"
-    assert pd.to_timedelta(when - epoch).total_seconds() == 1691517997
+    assert utils.td_to_seconds(when - epoch) == 1691517997
     when = np.datetime64(dt.datetime(2023, 8, 8, 18, 6, 37, 999999))
     assert hf.format_time(when) == "1691517997.999999"
 
@@ -897,7 +896,7 @@ def test_pps_step_shift():
     ds = xr.decode_cf(ds)
     sps = 4000
     assert len(ds.time) == 4 * sps
-    assert np.all(np.diff(ds.time.data) > 0)
+    assert np.all(np.diff(ds.time.data) > np.timedelta64(0, 'us'))
     assert ds.time.data[0] == np.datetime64("2023-09-20T04:22:18.859000")
     assert ds.time.data[sps] == np.datetime64("2023-09-20T04:22:19.859000")
     # the entire third sample shifts by half an interval

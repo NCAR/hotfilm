@@ -3,7 +3,6 @@ import logging
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 
 from hotfilm.isfs_dataset import IsfsDataset
 from hotfilm.hotfilm_dataset import HotfilmDataset
@@ -144,9 +143,10 @@ class CalibrateHotfilm:
         for hfc in cals + [None]:
             # save previous figure if time has changed or end of list
             if ctime and (not hfc or hfc.begin != ctime):
-                when = pd.to_datetime(ctime)
+                when = ctime.astype('datetime64[us]').item()
                 path = when.strftime(filename)
                 logger.info("saving %s", path)
+                assert fig is not None
                 fig.savefig(path)
                 plt.close(fig)
                 ctime = None

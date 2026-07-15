@@ -2,15 +2,15 @@
 
 import datetime as dt
 import numpy as np
-import pandas as pd
 
 from hotfilm.utils import td_to_microseconds
+from hotfilm.utils import td_to_seconds
 
 
 class time_formatter:
 
     ISO = "iso"
-    EPOCH = np.datetime64(dt.datetime(1970, 1, 1))
+    EPOCH = np.datetime64(dt.datetime(1970, 1, 1), 's')
     FLOAT_SECONDS = "%s.%f"
 
     timeformat: str
@@ -19,7 +19,7 @@ class time_formatter:
     def __init__(self, timeformat: str, first: np.datetime64):
         self.timeformat = timeformat
         self.first = first
-        self.formatter = None
+        self.formatter = self.format_strftime
         mformat = self.timeformat
         if self.timeformat == self.ISO:
             self.formatter = self.format_iso
@@ -27,11 +27,9 @@ class time_formatter:
             self.formatter = self.format_sf
         elif "%s" in mformat:
             self.formatter = self.format_s
-        else:
-            self.formatter = self.format_strftime
 
     def format_strftime(self, when: np.datetime64):
-        return pd.to_datetime(when).strftime(self.timeformat)
+        return when.astype('datetime64[us]').item().strftime(self.timeformat)
 
     def format_s(self, when: np.datetime64):
         "Interpolate a time format which contains %s"
@@ -39,12 +37,12 @@ class time_formatter:
         # Rather than modify the environment just for this, interpolate %s
         # explicitly here.
         mformat = self.timeformat
-        seconds = int((when - self.EPOCH).total_seconds())
+        seconds = td_to_seconds(when - self.EPOCH)
         mformat = self.timeformat.replace("%s", str(seconds))
-        return when.strftime(mformat)
+        return when.astype('datetime64[us]').item().strftime(mformat)
 
     def format_iso(self, when: np.datetime64):
-        return pd.to_datetime(when).isoformat()
+        return when.astype('datetime64[us]').item().isoformat()
 
     def format_sf(self, when: np.datetime64):
         "Interpolate %s%f time format."

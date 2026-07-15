@@ -10,9 +10,11 @@ found on the [hot films](https://wiki.ucar.edu/display/M2HATSISFS/hot+films)
 wiki page on the [M2HATS Logbook
 Wiki](https://wiki.ucar.edu/display/M2HATSISFS/).
 
-## Documentation:
+## Documentation
 
 - [Changelog](Changelog.md)
+- [Python Environment](Python-Environment.md): Creating Python environments
+  and installing dependencies for the Python processing scripts.
 - [Processing](docs/Processing.md): Process raw hot film voltage data and
   write to text or netcdf.
 - [Calibration](docs/Calibration.md): Calibrate hot film voltages to derive
