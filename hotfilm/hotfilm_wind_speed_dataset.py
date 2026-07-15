@@ -1,9 +1,10 @@
 import logging
 import xarray as xr
 import numpy as np
-from output_path import OutputPath
-from hotfilm.hotfilm_calibration import HotfilmCalibration
-from hotfilm.utils import dt_string
+
+from .output_path import OutputPath
+from .hotfilm_calibration import HotfilmCalibration
+from .utils import dt_string
 from .utils import convert_time_coordinate
 from .utils import set_time_coordinate_units
 
