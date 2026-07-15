@@ -8,7 +8,7 @@ from hotfilm.isfs_dataset import IsfsDataset
 from hotfilm.hotfilm_dataset import HotfilmDataset
 from hotfilm.hotfilm_wind_speed_dataset import HotfilmWindSpeedDataset
 from hotfilm.hotfilm_calibration import HotfilmCalibration
-from .utils import dt_string
+from .utils import dt_string, to_datetime
 from .utils import add_history_to_dataset
 from .utils import rdatetime
 
@@ -143,7 +143,7 @@ class CalibrateHotfilm:
         for hfc in cals + [None]:
             # save previous figure if time has changed or end of list
             if ctime and (not hfc or hfc.begin != ctime):
-                when = ctime.astype('datetime64[us]').item()
+                when = to_datetime(ctime)
                 path = when.strftime(filename)
                 logger.info("saving %s", path)
                 assert fig is not None

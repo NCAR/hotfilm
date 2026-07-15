@@ -3,11 +3,18 @@ from pathlib import Path
 import tempfile
 import logging
 import numpy as np
+import datetime as dt
+from .utils import to_datetime
 
 logger = logging.getLogger(__name__)
 
 
 class OutputPath:
+
+    when: dt.datetime | None
+    path: Path | None
+    tfile: tempfile.NamedTemporaryFile | None
+    filespec: str | None
 
     def __init__(self):
         self.when = None
@@ -17,7 +24,7 @@ class OutputPath:
 
     def start(self, filespec: str,
               starttime: np.datetime64) -> tempfile.NamedTemporaryFile:
-        when = starttime.astype('datetime64[us]').item()
+        when = to_datetime(starttime)
         path = Path(when.strftime(filespec))
         tfile = tempfile.NamedTemporaryFile(dir=str(path.parent),
                                             prefix=str(path.name)+'.',
@@ -46,7 +53,7 @@ class OutputPath:
         """
         path = self.path
         if when is not None:
-            when_dt = when.astype('datetime64[us]').item()
+            when_dt = to_datetime(when)
             path = Path(when_dt.strftime(self.filespec))
         minutes = None
         if period is not None:

@@ -40,6 +40,22 @@ def td_to_seconds(td64: np.timedelta64) -> int:
     return int(td64 / np.timedelta64(1, 's'))
 
 
+def to_datetime(when: np.datetime64) -> dt.datetime:
+    """
+    Convert a numpy.datetime64 to datetime.datetime.
+
+    The numpy.datetime64 type does not support timezones, so the returned
+    datetime will be naive, with tzinfo set to None.  Precision will be lost
+    if @p when has nanosecond precision, since datetime.datetime only supports
+    microsecond precision.  It would be reasonable to
+    replace(tzinfo=dt.timezone.utc) on the returned datetime, given the
+    presumption that all numpy.datetime64 values are in UTC, but that is not
+    done here.  Setting the timezone changes time string formatting where the
+    timezone is not expected nor required, since the timezone is implied.
+    """
+    return when.astype('datetime64[us]').item()
+
+
 def iso_to_datetime64(iso: str) -> np.datetime64:
     """
     Convert an ISO formatted string to a datetime64.  The timezone is assumed
@@ -65,7 +81,7 @@ def convert_time_coordinate(ds: xr.Dataset, dt: xr.DataArray,
     if basetime is None:
         basetime = dt.data[0]
     assert basetime is not None
-    when = basetime.astype('datetime64[us]').item()
+    when = to_datetime(basetime)
     base = when.replace(microsecond=0)
     units = (f'{ustep} since %s' %
              base.strftime("%Y-%m-%d %H:%M:%S+00:00"))
@@ -94,7 +110,7 @@ def set_time_coordinate_units(cdim: xr.DataArray, units: str) -> None:
     Set the encoding for this time coordinate relative to the first time
     using @p units.
     """
-    base = cdim.data[0].astype('datetime64[us]').item()
+    base = to_datetime(cdim.data[0])
     cdim.encoding = {'units': f'{units} since %s' %
                               base.strftime("%Y-%m-%d %H:%M:%S+00:00")}
 

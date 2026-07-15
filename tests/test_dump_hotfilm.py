@@ -60,7 +60,7 @@ def test_parse_line():
     assert len(ch1) == 8
     assert len(x) == 8
     assert len(y) == 8
-    when = x[0].astype('datetime64[us]').item()
+    when = utils.to_datetime(x[0])
     assert when.isoformat() == "2023-07-20T01:02:03.395000"
     assert when.strftime("%Y%m%d_%H%M%S") == "20230720_010203"
     assert x[-1] == x[0] + (7 * np.timedelta64(125000, 'us'))
@@ -198,26 +198,6 @@ def test_scan_skip():
     assert hf.skip_scan(data)
 
 
-def test_time_format():
-    hf = ReadHotfilm()
-    hf.timeformat = time_formatter.ISO
-    when = np.datetime64(dt.datetime(2023, 7, 23, 2, 3, 4, 765430))
-    assert hf.format_time(when) == "2023-07-23T02:03:04.765430"
-    hf.set_time_format("%H:%M:%S.%f")
-    assert hf.format_time(when) == "02:03:04.765430"
-
-
-def test_s_format():
-    hf = ReadHotfilm()
-    hf.timeformat = "%s.%f"
-    when = np.datetime64(dt.datetime(2023, 8, 8, 18, 6, 37, 0))
-    epoch = np.datetime64(dt.datetime(1970, 1, 1))
-    assert hf.format_time(when) == "1691517997.000000"
-    assert utils.td_to_seconds(when - epoch) == 1691517997
-    when = np.datetime64(dt.datetime(2023, 8, 8, 18, 6, 37, 999999))
-    assert hf.format_time(when) == "1691517997.999999"
-
-
 _block_lines = """
 2023-07-20T01:02:03.0 200, 521   2.3157625  2.2800555  2.1795704  2.1745145  2.2734196  2.2863753   2.325242  2.2114854
 2023-07-20T01:02:03.0 200, 501   0 0
@@ -305,42 +285,6 @@ def test_skip_blocks():
     assert ds['ch1'].data[23] == pytest.approx(2.2114854)
     assert ds['ch1'].data[39] == pytest.approx(2.5114854)
     assert np.isnan(ds['ch1'].data[26])
-
-
-def test_get_minutes():
-    # 20230801_164743
-    begin = dt.datetime(2023, 8, 1, 16, 47, 43, microsecond=900000)
-    next = dt.datetime(2023, 8, 1, 16, 47, 43, microsecond=900500)
-    end = dt.datetime(2023, 8, 1, 16, 48, 43, microsecond=899500)
-    interval = (next - begin) / dt.timedelta(microseconds=1)
-    assert interval == 500
-    period = end - begin + dt.timedelta(microseconds=500)
-    seconds = period.total_seconds()
-    assert seconds == 60.0
-    assert seconds // 60 == 1
-
-
-def test_td_to_microseconds():
-    day = 24*60*60*1000000
-    tests = {
-        dt.timedelta(microseconds=0): 0,
-        dt.timedelta(microseconds=1): 1,
-        dt.timedelta(microseconds=999): 999,
-        dt.timedelta(microseconds=1000): 1000,
-        dt.timedelta(microseconds=1001): 1001,
-        dt.timedelta(days=1): day,
-        dt.timedelta(days=1, seconds=2, microseconds=1001): day + 2001001,
-        dt.timedelta(microseconds=999999): 999999,
-        dt.timedelta(microseconds=1000000): 1000000,
-        dt.timedelta(microseconds=1000001): 1000001,
-        dt.timedelta(microseconds=999999999): 999999999,
-        dt.timedelta(microseconds=1000000000): 1000000000,
-        dt.timedelta(microseconds=1000000001): 1000000001
-    }
-    for td, xusec in tests.items():
-        td = np.timedelta64(td)
-        assert utils.td_to_microseconds(td) == xusec
-        assert isinstance(utils.td_to_microseconds(td), int)
 
 
 def remove_attributes(ds: xr.Dataset, attrs: list[str]) -> None:

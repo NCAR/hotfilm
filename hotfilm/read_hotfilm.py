@@ -13,14 +13,15 @@ from typing import IO, Generator, Iterable
 import numpy as np
 import xarray as xr
 
-from hotfilm.outout_path import OutputPath
-from hotfilm.utils import combine_datasets
-from hotfilm.utils import convert_time_coordinate
-from hotfilm.utils import td_to_microseconds
-from hotfilm.utils import split_dataset
-from hotfilm.utils import add_history_to_dataset
-from hotfilm.utils import rdatetime
-from hotfilm.time_formatter import time_formatter
+from .output_path import OutputPath
+from .utils import combine_datasets
+from .utils import convert_time_coordinate
+from .utils import td_to_microseconds
+from .utils import split_dataset
+from .utils import add_history_to_dataset
+from .utils import rdatetime
+from .time_formatter import time_formatter
+from .hotfilm_dataset import HotfilmDataset
 
 
 logger = logging.getLogger(__name__)
@@ -325,7 +326,7 @@ class ReadHotfilm:
 
     def format_time(self, when: np.datetime64):
         "Convenient shortcut, but not optimal."
-        return time_formatter(self.timeformat, when)(when)
+        return time_formatter(self.timeformat)(when)
 
     def set_source(self, source):
         logger.info("setting sources: %s", ",".join(source))
